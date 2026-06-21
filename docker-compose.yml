@@ -1,0 +1,12 @@
+services:
+  key-rotator:
+    build: .
+    # Or use a prebuilt image instead of building:
+    # image: ghcr.io/your-org/newapi-key-rotator:latest
+    container_name: newapi-key-rotator
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - "8080:8080"   # web console; put behind a reverse proxy / firewall in production
+    volumes:
+      - ./data:/data  # persists the key pool (pool.json) across restarts

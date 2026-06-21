@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>new-api Key 轮换控制台</title>
+<style>
+  :root { color-scheme: light dark; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 24px;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif;
+    background: #0f172a; color: #e2e8f0; line-height: 1.5;
+  }
+  .wrap { max-width: 760px; margin: 0 auto; }
+  h1 { font-size: 20px; margin: 0 0 16px; }
+  .card { background: #1e293b; border: 1px solid #334155; border-radius: 12px; padding: 20px; margin-bottom: 20px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; }
+  .stat { background: #0f172a; border-radius: 8px; padding: 12px; }
+  .stat .label { font-size: 12px; color: #94a3b8; }
+  .stat .value { font-size: 18px; font-weight: 600; margin-top: 4px; word-break: break-all; }
+  .badge { display: inline-block; padding: 2px 10px; border-radius: 999px; font-size: 13px; font-weight: 600; }
+  .b-on { background: #064e3b; color: #6ee7b7; }
+  .b-auto { background: #7c2d12; color: #fdba74; }
+  .b-manual { background: #334155; color: #cbd5e1; }
+  .b-unknown { background: #334155; color: #94a3b8; }
+  textarea {
+    width: 100%; min-height: 200px; padding: 12px; border-radius: 8px;
+    border: 1px solid #334155; background: #0f172a; color: #e2e8f0;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; resize: vertical;
+  }
+  .row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-top: 12px; }
+  button {
+    border: none; border-radius: 8px; padding: 10px 18px; font-size: 14px; font-weight: 600;
+    cursor: pointer; background: #2563eb; color: #fff;
+  }
+  button.secondary { background: #334155; color: #e2e8f0; }
+  button:disabled { opacity: .5; cursor: default; }
+  .muted { color: #94a3b8; font-size: 13px; }
+  .err { color: #fca5a5; }
+  .ok { color: #6ee7b7; }
+  .hint { font-size: 12px; color: #94a3b8; margin-top: 6px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>new-api Key 轮换控制台</h1>
+
+  <div class="card">
+    <div class="grid">
+      <div class="stat"><div class="label">目标渠道</div><div class="value" id="s-channel">—</div></div>
+      <div class="stat"><div class="label">当前状态</div><div class="value"><span id="s-status" class="badge b-unknown">—</span></div></div>
+      <div class="stat"><div class="label">Key 进度</div><div class="value" id="s-progress">—</div></div>
+      <div class="stat"><div class="label">剩余可用</div><div class="value" id="s-remaining">—</div></div>
+      <div class="stat"><div class="label">当前使用 Key</div><div class="value" id="s-current">—</div></div>
+      <div class="stat"><div class="label">最后检查</div><div class="value" id="s-checked">—</div></div>
+    </div>
+    <div class="row">
+      <button class="secondary" id="btn-rotate" type="button">立即执行一次检查</button>
+      <span class="muted" id="s-action"></span>
+    </div>
+    <div class="row"><span class="err" id="s-error"></span></div>
+  </div>
+
+  <div class="card">
+    <h1 style="font-size:16px">提交 / 替换备用 Key 池</h1>
+    <p class="muted">每行一个 key。提交即<strong>整批替换</strong>并把进度重置到第一个；自动去除空行与重复。渠道被自动禁用时会从这里依次取下一个 key 换上并启用。</p>
+    <textarea id="keys" placeholder="sk-xxxxxxxx&#10;sk-yyyyyyyy&#10;sk-zzzzzzzz"></textarea>
+    <div class="row">
+      <button id="btn-submit" type="button">保存并立即应用</button>
+      <span id="submit-msg"></span>
+    </div>
+    <p class="hint">提示：出于安全，控制台不会回显已保存的 key 明文，仅显示数量与末 4 位。重新打开页面后输入框为空属正常。</p>
+  </div>
+</div>
+
+<script>
+const statusBadge = (s) => {
+  switch (s) {
+    case 1: return ['启用', 'b-on'];
+    case 2: return ['手动禁用', 'b-manual'];
+    case 3: return ['自动禁用', 'b-auto'];
+    default: return ['未知/未检查', 'b-unknown'];
+  }
+};
+
+async function refresh() {
+  try {
+    const r = await fetch('api/status', { headers: { 'Accept': 'application/json' } });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const d = await r.json();
+    document.getElementById('s-channel').textContent = '#' + d.channel_id;
+    const [text, cls] = statusBadge(d.last_status);
+    const badge = document.getElementById('s-status');
+    badge.textContent = text;
+    badge.className = 'badge ' + cls;
+    const p = d.pool || {};
+    document.getElementById('s-progress').textContent = (p.index || 0) + ' / ' + (p.total || 0) + (p.exhausted ? ' (已用尽)' : '');
+    document.getElementById('s-remaining').textContent = (p.remaining || 0);
+    document.getElementById('s-current').textContent = p.current_key || '—';
+    document.getElementById('s-checked').textContent = d.last_checked ? new Date(d.last_checked).toLocaleString() : '—';
+    document.getElementById('s-action').textContent = d.last_action ? ('最近动作：' + d.last_action) : '';
+    document.getElementById('s-error').textContent = d.last_error ? ('错误：' + d.last_error) : '';
+  } catch (e) {
+    document.getElementById('s-error').textContent = '无法获取状态：' + e.message;
+  }
+}
+
+async function submitKeys() {
+  const btn = document.getElementById('btn-submit');
+  const msg = document.getElementById('submit-msg');
+  const keys = document.getElementById('keys').value;
+  btn.disabled = true; msg.textContent = '保存中…'; msg.className = 'muted';
+  try {
+    const r = await fetch('api/keys', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ keys })
+    });
+    const d = await r.json();
+    if (!r.ok || !d.success) throw new Error(d.message || ('HTTP ' + r.status));
+    msg.textContent = '已保存 ' + d.count + ' 个 key,进度已重置。';
+    msg.className = 'ok';
+    document.getElementById('keys').value = '';
+    refresh();
+  } catch (e) {
+    msg.textContent = '保存失败：' + e.message;
+    msg.className = 'err';
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function rotateNow() {
+  const btn = document.getElementById('btn-rotate');
+  btn.disabled = true;
+  try { await fetch('api/rotate-now', { method: 'POST' }); } catch (e) {}
+  setTimeout(() => { refresh(); btn.disabled = false; }, 800);
+}
+
+document.getElementById('btn-submit').addEventListener('click', submitKeys);
+document.getElementById('btn-rotate').addEventListener('click', rotateNow);
+refresh();
+setInterval(refresh, 5000);
+</script>
+</body>
+</html>
