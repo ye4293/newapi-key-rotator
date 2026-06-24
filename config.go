@@ -8,25 +8,22 @@ import (
 	"time"
 )
 
-// Config holds all runtime configuration, loaded from environment variables so
-// the service is 12-factor friendly and easy to drive from Docker / compose.
+type InstanceConfig struct {
+	BaseURL     string
+	AccessToken string
+	UserID      string
+	ChannelID   int
+	Insecure    bool
+}
+
 type Config struct {
-	// new-api connection
-	BaseURL     string // e.g. https://api.example.com (no trailing slash)
-	AccessToken string // admin system access token
-	UserID      string // admin user id, sent as New-Api-User header
-	ChannelID   int    // target single-key channel id
-
-	// behaviour
-	DataDir      string        // directory holding the persisted key pool (pool.json)
-	PollInterval time.Duration // how often to check channel status
-	HTTPTimeout  time.Duration // per-request timeout against new-api
-	Insecure     bool          // skip TLS verification (self-signed certs)
-
-	// embedded web console
-	WebListen   string // listen address, e.g. :8080
-	WebUsername string // basic-auth username for the console
-	WebPassword string // basic-auth password; empty disables auth (with a loud warning)
+	Instances    []*InstanceConfig
+	DataDir      string
+	PollInterval time.Duration
+	HTTPTimeout  time.Duration
+	WebListen    string
+	WebUsername  string
+	WebPassword  string
 }
 
 func getenv(key, def string) string {
@@ -36,43 +33,15 @@ func getenv(key, def string) string {
 	return def
 }
 
-// LoadConfig reads configuration from the environment and validates required fields.
 func LoadConfig() (*Config, error) {
 	c := &Config{
-		BaseURL:     strings.TrimRight(getenv("NEWAPI_BASE_URL", ""), "/"),
-		AccessToken: getenv("NEWAPI_ACCESS_TOKEN", ""),
-		UserID:      getenv("NEWAPI_USER_ID", ""),
 		DataDir:     getenv("DATA_DIR", "/data"),
 		WebListen:   getenv("WEB_LISTEN", ":8080"),
 		WebUsername: getenv("WEB_USERNAME", "admin"),
 		WebPassword: getenv("WEB_PASSWORD", ""),
-		Insecure:    strings.EqualFold(getenv("INSECURE_SKIP_VERIFY", "false"), "true"),
 	}
 
-	var missing []string
-	if c.BaseURL == "" {
-		missing = append(missing, "NEWAPI_BASE_URL")
-	}
-	if c.AccessToken == "" {
-		missing = append(missing, "NEWAPI_ACCESS_TOKEN")
-	}
-	if c.UserID == "" {
-		missing = append(missing, "NEWAPI_USER_ID")
-	}
-	channelRaw := getenv("CHANNEL_ID", "")
-	if channelRaw == "" {
-		missing = append(missing, "CHANNEL_ID")
-	}
-	if len(missing) > 0 {
-		return nil, fmt.Errorf("missing required env vars: %s", strings.Join(missing, ", "))
-	}
-
-	id, err := strconv.Atoi(channelRaw)
-	if err != nil || id <= 0 {
-		return nil, fmt.Errorf("CHANNEL_ID must be a positive integer, got %q", channelRaw)
-	}
-	c.ChannelID = id
-
+	var err error
 	if c.PollInterval, err = parseDuration("POLL_INTERVAL", "60s"); err != nil {
 		return nil, err
 	}
@@ -83,7 +52,59 @@ func LoadConfig() (*Config, error) {
 		return nil, err
 	}
 
+	inst0, err := loadInstanceFromEnv("NEWAPI_BASE_URL", "NEWAPI_ACCESS_TOKEN", "NEWAPI_USER_ID", "CHANNEL_ID", "INSECURE_SKIP_VERIFY")
+	if err != nil {
+		return nil, err
+	}
+	c.Instances = append(c.Instances, inst0)
+
+	for n := 2; ; n++ {
+		p := fmt.Sprintf("INSTANCE_%d_", n)
+		if strings.TrimSpace(os.Getenv(p+"BASE_URL")) == "" {
+			break
+		}
+		inst, err := loadInstanceFromEnv(p+"BASE_URL", p+"ACCESS_TOKEN", p+"USER_ID", p+"CHANNEL_ID", p+"INSECURE_SKIP_VERIFY")
+		if err != nil {
+			return nil, fmt.Errorf("instance %d: %w", n, err)
+		}
+		c.Instances = append(c.Instances, inst)
+	}
+
 	return c, nil
+}
+
+func loadInstanceFromEnv(baseURLKey, tokenKey, userIDKey, channelKey, insecureKey string) (*InstanceConfig, error) {
+	inst := &InstanceConfig{
+		BaseURL:     strings.TrimRight(strings.TrimSpace(os.Getenv(baseURLKey)), "/"),
+		AccessToken: strings.TrimSpace(os.Getenv(tokenKey)),
+		UserID:      strings.TrimSpace(os.Getenv(userIDKey)),
+		Insecure:    strings.EqualFold(strings.TrimSpace(os.Getenv(insecureKey)), "true"),
+	}
+
+	var missing []string
+	if inst.BaseURL == "" {
+		missing = append(missing, baseURLKey)
+	}
+	if inst.AccessToken == "" {
+		missing = append(missing, tokenKey)
+	}
+	if inst.UserID == "" {
+		missing = append(missing, userIDKey)
+	}
+	channelRaw := strings.TrimSpace(os.Getenv(channelKey))
+	if channelRaw == "" {
+		missing = append(missing, channelKey)
+	}
+	if len(missing) > 0 {
+		return nil, fmt.Errorf("missing required env vars: %s", strings.Join(missing, ", "))
+	}
+
+	id, err := strconv.Atoi(channelRaw)
+	if err != nil || id <= 0 {
+		return nil, fmt.Errorf("%s must be a positive integer, got %q", channelKey, channelRaw)
+	}
+	inst.ChannelID = id
+	return inst, nil
 }
 
 func parseDuration(key, def string) (time.Duration, error) {

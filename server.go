@@ -6,35 +6,58 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"strconv"
 )
 
 //go:embed web/index.html
 var indexHTML []byte
 
-// Server exposes the web console: a single page plus a small JSON API to view
-// status and replace the key pool at runtime (no file edits, no restart).
 type Server struct {
-	cfg     *Config
-	store   *Store
-	rotator *Rotator
-	trigger chan<- struct{}
+	cfg       *Config
+	instances []*instance
 }
 
-func NewServer(cfg *Config, store *Store, rotator *Rotator, trigger chan<- struct{}) *Server {
-	return &Server{cfg: cfg, store: store, rotator: rotator, trigger: trigger}
+func NewServer(cfg *Config, instances []*instance) *Server {
+	return &Server{cfg: cfg, instances: instances}
 }
 
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", s.handleIndex)
-	mux.HandleFunc("/api/status", s.handleStatus)
-	mux.HandleFunc("/api/keys", s.handleKeys)
-	mux.HandleFunc("/api/rotate-now", s.handleRotateNow)
+	mux.HandleFunc("/api/instances", s.handleInstances)
+	mux.HandleFunc("/api/instance/{idx}/status", s.handleInstanceStatus)
+	mux.HandleFunc("/api/instance/{idx}/keys", s.handleInstanceKeys)
+	mux.HandleFunc("/api/instance/{idx}/keys/append", s.handleInstanceKeysAppend)
+	mux.HandleFunc("/api/instance/{idx}/rotate-now", s.handleInstanceRotateNow)
+	// Legacy routes — delegate to instance 0 for backward compatibility.
+	mux.HandleFunc("/api/status", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, s.instances[0].rotator.Status())
+	})
+	mux.HandleFunc("/api/keys", func(w http.ResponseWriter, r *http.Request) {
+		s.keysHandler(w, r, s.instances[0])
+	})
+	mux.HandleFunc("/api/keys/append", func(w http.ResponseWriter, r *http.Request) {
+		s.keysAppendHandler(w, r, s.instances[0])
+	})
+	mux.HandleFunc("/api/rotate-now", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		fireInstance(s.instances[0].trigger)
+		writeJSON(w, http.StatusOK, map[string]any{"success": true})
+	})
 	return s.withAuth(mux)
 }
 
-// withAuth applies HTTP Basic Auth when a password is configured. The whole console
-// manages API keys, so running it without a password is allowed only with a warning.
+func (s *Server) getInstance(r *http.Request) (*instance, bool) {
+	idx, err := strconv.Atoi(r.PathValue("idx"))
+	if err != nil || idx < 0 || idx >= len(s.instances) {
+		return nil, false
+	}
+	return s.instances[idx], true
+}
+
 func (s *Server) withAuth(next http.Handler) http.Handler {
 	if s.cfg.WebPassword == "" {
 		log.Printf("WARN WEB_PASSWORD is not set — the web console is UNPROTECTED; set it before exposing this service")
@@ -62,11 +85,61 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(indexHTML)
 }
 
-func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, s.rotator.Status())
+func (s *Server) handleInstances(w http.ResponseWriter, r *http.Request) {
+	type instanceInfo struct {
+		Index     int    `json:"index"`
+		BaseURL   string `json:"base_url"`
+		ChannelID int    `json:"channel_id"`
+	}
+	infos := make([]instanceInfo, len(s.instances))
+	for i, inst := range s.instances {
+		infos[i] = instanceInfo{Index: i, BaseURL: inst.cfg.BaseURL, ChannelID: inst.cfg.ChannelID}
+	}
+	writeJSON(w, http.StatusOK, infos)
 }
 
-func (s *Server) handleKeys(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleInstanceStatus(w http.ResponseWriter, r *http.Request) {
+	inst, ok := s.getInstance(r)
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	writeJSON(w, http.StatusOK, inst.rotator.Status())
+}
+
+func (s *Server) handleInstanceKeys(w http.ResponseWriter, r *http.Request) {
+	inst, ok := s.getInstance(r)
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	s.keysHandler(w, r, inst)
+}
+
+func (s *Server) handleInstanceKeysAppend(w http.ResponseWriter, r *http.Request) {
+	inst, ok := s.getInstance(r)
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	s.keysAppendHandler(w, r, inst)
+}
+
+func (s *Server) handleInstanceRotateNow(w http.ResponseWriter, r *http.Request) {
+	inst, ok := s.getInstance(r)
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	fireInstance(inst.trigger)
+	writeJSON(w, http.StatusOK, map[string]any{"success": true})
+}
+
+func (s *Server) keysHandler(w http.ResponseWriter, r *http.Request, inst *instance) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -78,29 +151,43 @@ func (s *Server) handleKeys(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"success": false, "message": "invalid JSON body"})
 		return
 	}
-	count, err := s.store.SetKeys(body.Keys)
+	count, err := inst.store.SetKeys(body.Keys)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"success": false, "message": err.Error()})
 		return
 	}
-	log.Printf("INFO key pool replaced via console: %d key(s) loaded, progress reset", count)
-	s.fire() // apply immediately if the channel is currently auto-disabled
+	log.Printf("INFO channel #%d key pool replaced: %d key(s), progress reset", inst.cfg.ChannelID, count)
+	fireInstance(inst.trigger)
 	writeJSON(w, http.StatusOK, map[string]any{"success": true, "count": count})
 }
 
-func (s *Server) handleRotateNow(w http.ResponseWriter, r *http.Request) {
+func (s *Server) keysAppendHandler(w http.ResponseWriter, r *http.Request, inst *instance) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	s.fire()
-	writeJSON(w, http.StatusOK, map[string]any{"success": true})
+	var body struct {
+		Keys string `json:"keys"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<20)).Decode(&body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"success": false, "message": "invalid JSON body"})
+		return
+	}
+	added, err := inst.store.AppendKeys(body.Keys)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"success": false, "message": err.Error()})
+		return
+	}
+	log.Printf("INFO channel #%d key pool appended: %d new key(s) added", inst.cfg.ChannelID, added)
+	if added > 0 {
+		fireInstance(inst.trigger)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"success": true, "added": added})
 }
 
-// fire asks the rotation loop to run a tick now, without blocking if one is pending.
-func (s *Server) fire() {
+func fireInstance(trigger chan<- struct{}) {
 	select {
-	case s.trigger <- struct{}{}:
+	case trigger <- struct{}{}:
 	default:
 	}
 }

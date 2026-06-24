@@ -8,28 +8,26 @@ import (
 	"time"
 )
 
-// Rotator runs the failover loop: every tick it checks the target channel and, when
-// new-api has auto-disabled it, swaps in the next backup key and re-enables it.
 type Rotator struct {
-	cfg    *Config
-	client *Client
-	store  *Store
+	instCfg *InstanceConfig
+	cfg     *Config
+	client  *Client
+	store   *Store
 
-	mu          sync.Mutex
-	lastStatus  int
-	lastAction  string
-	lastError   string
-	lastChecked time.Time
-	warnedEmpty bool // avoid log spam once the pool is exhausted
+	mu               sync.Mutex
+	lastStatus       int
+	lastAction       string
+	lastError        string
+	lastChecked      time.Time
+	warnedEmpty      bool
+	channelUsedQuota int64
+	channelBalance   float64
 }
 
-func NewRotator(cfg *Config, client *Client, store *Store) *Rotator {
-	return &Rotator{cfg: cfg, client: client, store: store}
+func NewRotator(instCfg *InstanceConfig, cfg *Config, client *Client, store *Store) *Rotator {
+	return &Rotator{instCfg: instCfg, cfg: cfg, client: client, store: store}
 }
 
-// Run blocks until ctx is cancelled. It runs one tick immediately, then on every
-// poll interval, and also whenever a manual trigger fires (e.g. after the console
-// submits a fresh key batch) so changes take effect without waiting a full cycle.
 func (r *Rotator) Run(ctx context.Context, trigger <-chan struct{}) {
 	r.tick(ctx)
 	ticker := time.NewTicker(r.cfg.PollInterval)
@@ -47,17 +45,15 @@ func (r *Rotator) Run(ctx context.Context, trigger <-chan struct{}) {
 }
 
 func (r *Rotator) tick(ctx context.Context) {
-	status, channel, err := r.client.GetChannel(ctx, r.cfg.ChannelID)
+	status, channel, err := r.client.GetChannel(ctx, r.instCfg.ChannelID)
 	if err != nil {
 		r.recordError("get channel: " + err.Error())
-		log.Printf("ERROR check channel #%d: %v", r.cfg.ChannelID, err)
+		log.Printf("ERROR check channel #%d: %v", r.instCfg.ChannelID, err)
 		return
 	}
-	r.recordStatus(status)
+	r.recordStatus(status, channel)
 
 	if status != channelStatusAutoDisabled {
-		// Enabled or manually disabled — nothing to do. A manual disable is treated
-		// as a deliberate operator action and left untouched.
 		return
 	}
 
@@ -69,19 +65,17 @@ func (r *Rotator) tick(ctx context.Context) {
 		r.warnedEmpty = true
 		r.mu.Unlock()
 		if !warned {
-			log.Printf("WARN channel #%d auto-disabled but key pool is empty/exhausted; not rotating", r.cfg.ChannelID)
+			log.Printf("WARN channel #%d auto-disabled but key pool is empty/exhausted; not rotating", r.instCfg.ChannelID)
 		}
 		return
 	}
 
 	if err := r.client.ApplyKeyAndEnable(ctx, channel, next); err != nil {
 		r.recordError("apply key: " + err.Error())
-		log.Printf("ERROR channel #%d apply key #%d: %v", r.cfg.ChannelID, idx+1, err)
+		log.Printf("ERROR channel #%d apply key #%d: %v", r.instCfg.ChannelID, idx+1, err)
 		return
 	}
 	if err := r.store.CommitAdvance(); err != nil {
-		// The upstream key was already swapped; only progress persistence failed.
-		// Log loudly so a restart doesn't reuse the same key.
 		log.Printf("ERROR persist progress after applying key #%d: %v", idx+1, err)
 	}
 
@@ -90,17 +84,18 @@ func (r *Rotator) tick(ctx context.Context) {
 	r.mu.Lock()
 	r.warnedEmpty = false
 	r.mu.Unlock()
-	log.Printf("INFO channel #%d auto-disabled → applied key %d/%d (%s) and re-enabled", r.cfg.ChannelID, idx+1, total, maskKey(next))
+	log.Printf("INFO channel #%d auto-disabled → applied key %d/%d (%s) and re-enabled", r.instCfg.ChannelID, idx+1, total, maskKey(next))
 }
 
-// Status is the live view surfaced by the web console.
 type Status struct {
-	ChannelID   int          `json:"channel_id"`
-	LastStatus  int          `json:"last_status"`
-	LastAction  string       `json:"last_action"`
-	LastError   string       `json:"last_error"`
-	LastChecked string       `json:"last_checked"`
-	Pool        PoolSnapshot `json:"pool"`
+	ChannelID        int          `json:"channel_id"`
+	LastStatus       int          `json:"last_status"`
+	LastAction       string       `json:"last_action"`
+	LastError        string       `json:"last_error"`
+	LastChecked      string       `json:"last_checked"`
+	ChannelUsedQuota int64        `json:"channel_used_quota"`
+	ChannelBalance   float64      `json:"channel_balance"`
+	Pool             PoolSnapshot `json:"pool"`
 }
 
 func (r *Rotator) Status() Status {
@@ -111,21 +106,29 @@ func (r *Rotator) Status() Status {
 		checked = r.lastChecked.Format(time.RFC3339)
 	}
 	return Status{
-		ChannelID:   r.cfg.ChannelID,
-		LastStatus:  r.lastStatus,
-		LastAction:  r.lastAction,
-		LastError:   r.lastError,
-		LastChecked: checked,
-		Pool:        r.store.Snapshot(),
+		ChannelID:        r.instCfg.ChannelID,
+		LastStatus:       r.lastStatus,
+		LastAction:       r.lastAction,
+		LastError:        r.lastError,
+		LastChecked:      checked,
+		ChannelUsedQuota: r.channelUsedQuota,
+		ChannelBalance:   r.channelBalance,
+		Pool:             r.store.Snapshot(),
 	}
 }
 
-func (r *Rotator) recordStatus(status int) {
+func (r *Rotator) recordStatus(status int, channel map[string]any) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.lastStatus = status
 	r.lastChecked = time.Now()
 	r.lastError = ""
+	if q, ok := channel["used_quota"].(float64); ok {
+		r.channelUsedQuota = int64(q)
+	}
+	if b, ok := channel["balance"].(float64); ok {
+		r.channelBalance = b
+	}
 }
 
 func (r *Rotator) recordAction(action string) {

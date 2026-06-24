@@ -33,15 +33,15 @@ type apiResp struct {
 	Data    json.RawMessage `json:"data"`
 }
 
-func NewClient(cfg *Config) *Client {
+func NewClient(inst *InstanceConfig, cfg *Config) *Client {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
-	if cfg.Insecure {
+	if inst.Insecure {
 		transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
 	}
 	return &Client{
-		baseURL: cfg.BaseURL,
-		token:   cfg.AccessToken,
-		userID:  cfg.UserID,
+		baseURL: inst.BaseURL,
+		token:   inst.AccessToken,
+		userID:  inst.UserID,
 		http:    &http.Client{Timeout: cfg.HTTPTimeout, Transport: transport},
 	}
 }

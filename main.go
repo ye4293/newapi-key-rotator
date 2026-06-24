@@ -3,13 +3,22 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 )
+
+type instance struct {
+	cfg     *InstanceConfig
+	store   *Store
+	rotator *Rotator
+	trigger chan struct{}
+}
 
 func main() {
 	log.SetFlags(log.LstdFlags | log.LUTC)
@@ -19,35 +28,44 @@ func main() {
 		log.Fatalf("config error: %v", err)
 	}
 
-	store, err := NewStore(cfg.DataDir)
-	if err != nil {
-		log.Fatalf("store error: %v", err)
+	instances := make([]*instance, len(cfg.Instances))
+	for i, instCfg := range cfg.Instances {
+		poolFile := fmt.Sprintf("pool_%d.json", i)
+		if i == 0 {
+			poolFile = "pool.json"
+		}
+		store, err := NewStore(filepath.Join(cfg.DataDir, poolFile))
+		if err != nil {
+			log.Fatalf("store error (instance %d): %v", i, err)
+		}
+		client := NewClient(instCfg, cfg)
+		trigger := make(chan struct{}, 1)
+		rotator := NewRotator(instCfg, cfg, client, store)
+		instances[i] = &instance{cfg: instCfg, store: store, rotator: rotator, trigger: trigger}
 	}
 
-	client := NewClient(cfg)
-	rotator := NewRotator(cfg, client, store)
-
-	trigger := make(chan struct{}, 1)
-	server := NewServer(cfg, store, rotator, trigger)
+	server := NewServer(cfg, instances)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	// Background failover loop.
-	loopDone := make(chan struct{})
-	go func() {
-		defer close(loopDone)
-		rotator.Run(ctx, trigger)
-	}()
+	doneChs := make([]chan struct{}, len(instances))
+	for i, inst := range instances {
+		done := make(chan struct{})
+		doneChs[i] = done
+		go func(inst *instance, done chan struct{}) {
+			defer close(done)
+			inst.rotator.Run(ctx, inst.trigger)
+		}(inst, done)
+	}
 
-	// Web console.
 	httpSrv := &http.Server{
 		Addr:              cfg.WebListen,
 		Handler:           server.Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	go func() {
-		log.Printf("INFO web console listening on %s (channel #%d, poll %s)", cfg.WebListen, cfg.ChannelID, cfg.PollInterval)
+		log.Printf("INFO web console listening on %s (%d instance(s), poll %s)", cfg.WebListen, len(instances), cfg.PollInterval)
 		if err := httpSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Fatalf("web server error: %v", err)
 		}
@@ -59,6 +77,8 @@ func main() {
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	_ = httpSrv.Shutdown(shutdownCtx)
-	<-loopDone
+	for _, done := range doneChs {
+		<-done
+	}
 	_ = os.Stdout.Sync()
 }
