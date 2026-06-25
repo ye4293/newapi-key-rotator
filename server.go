@@ -29,6 +29,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/instance/{idx}/keys", s.handleInstanceKeys)
 	mux.HandleFunc("/api/instance/{idx}/keys/append", s.handleInstanceKeysAppend)
 	mux.HandleFunc("/api/instance/{idx}/rotate-now", s.handleInstanceRotateNow)
+	mux.HandleFunc("/api/instance/{idx}/channel-id", s.handleInstanceChannelID)
 	// Legacy routes — delegate to instance 0 for backward compatibility.
 	mux.HandleFunc("/api/status", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, s.instances[0].rotator.Status())
@@ -123,6 +124,44 @@ func (s *Server) handleInstanceKeysAppend(w http.ResponseWriter, r *http.Request
 		return
 	}
 	s.keysAppendHandler(w, r, inst)
+}
+
+func (s *Server) handleInstanceChannelID(w http.ResponseWriter, r *http.Request) {
+	inst, ok := s.getInstance(r)
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		effective := inst.store.ChannelID(inst.cfg.ChannelID)
+		writeJSON(w, http.StatusOK, map[string]any{
+			"channel_id":         effective,
+			"default_channel_id": inst.cfg.ChannelID,
+			"is_custom":          effective != inst.cfg.ChannelID,
+		})
+	case http.MethodPost:
+		var body struct {
+			ChannelID int `json:"channel_id"`
+		}
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1024)).Decode(&body); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"success": false, "message": "invalid JSON"})
+			return
+		}
+		if body.ChannelID < 0 {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"success": false, "message": "channel_id must be >= 0"})
+			return
+		}
+		if err := inst.store.SetChannelOverride(body.ChannelID); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"success": false, "message": err.Error()})
+			return
+		}
+		log.Printf("INFO channel override set to %d for instance (default %d)", body.ChannelID, inst.cfg.ChannelID)
+		fireInstance(inst.trigger)
+		writeJSON(w, http.StatusOK, map[string]any{"success": true, "channel_id": inst.store.ChannelID(inst.cfg.ChannelID)})
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
 }
 
 func (s *Server) handleInstanceRotateNow(w http.ResponseWriter, r *http.Request) {

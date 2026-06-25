@@ -45,10 +45,11 @@ func (r *Rotator) Run(ctx context.Context, trigger <-chan struct{}) {
 }
 
 func (r *Rotator) tick(ctx context.Context) {
-	status, channel, err := r.client.GetChannel(ctx, r.instCfg.ChannelID)
+	chID := r.store.ChannelID(r.instCfg.ChannelID)
+	status, channel, err := r.client.GetChannel(ctx, chID)
 	if err != nil {
 		r.recordError("get channel: " + err.Error())
-		log.Printf("ERROR check channel #%d: %v", r.instCfg.ChannelID, err)
+		log.Printf("ERROR check channel #%d: %v", chID, err)
 		return
 	}
 	r.recordStatus(status, channel)
@@ -65,14 +66,14 @@ func (r *Rotator) tick(ctx context.Context) {
 		r.warnedEmpty = true
 		r.mu.Unlock()
 		if !warned {
-			log.Printf("WARN channel #%d auto-disabled but key pool is empty/exhausted; not rotating", r.instCfg.ChannelID)
+			log.Printf("WARN channel #%d auto-disabled but key pool is empty/exhausted; not rotating", chID)
 		}
 		return
 	}
 
 	if err := r.client.ApplyKeyAndEnable(ctx, channel, next); err != nil {
 		r.recordError("apply key: " + err.Error())
-		log.Printf("ERROR channel #%d apply key #%d: %v", r.instCfg.ChannelID, idx+1, err)
+		log.Printf("ERROR channel #%d apply key #%d: %v", chID, idx+1, err)
 		return
 	}
 	if err := r.store.CommitAdvance(); err != nil {
@@ -84,11 +85,13 @@ func (r *Rotator) tick(ctx context.Context) {
 	r.mu.Lock()
 	r.warnedEmpty = false
 	r.mu.Unlock()
-	log.Printf("INFO channel #%d auto-disabled → applied key %d/%d (%s) and re-enabled", r.instCfg.ChannelID, idx+1, total, maskKey(next))
+	log.Printf("INFO channel #%d auto-disabled → applied key %d/%d (%s) and re-enabled", chID, idx+1, total, maskKey(next))
 }
 
 type Status struct {
 	ChannelID        int          `json:"channel_id"`
+	DefaultChannelID int          `json:"default_channel_id"`
+	IsCustomChannel  bool         `json:"is_custom_channel"`
 	LastStatus       int          `json:"last_status"`
 	LastAction       string       `json:"last_action"`
 	LastError        string       `json:"last_error"`
@@ -105,8 +108,11 @@ func (r *Rotator) Status() Status {
 	if !r.lastChecked.IsZero() {
 		checked = r.lastChecked.Format(time.RFC3339)
 	}
+	effective := r.store.ChannelID(r.instCfg.ChannelID)
 	return Status{
-		ChannelID:        r.instCfg.ChannelID,
+		ChannelID:        effective,
+		DefaultChannelID: r.instCfg.ChannelID,
+		IsCustomChannel:  effective != r.instCfg.ChannelID,
 		LastStatus:       r.lastStatus,
 		LastAction:       r.lastAction,
 		LastError:        r.lastError,

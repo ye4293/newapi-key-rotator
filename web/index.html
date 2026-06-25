@@ -47,6 +47,14 @@
   .err { color: #fca5a5; }
   .ok { color: #6ee7b7; }
   .hint { font-size: 12px; color: #94a3b8; margin-top: 6px; }
+  .ch-edit { display: flex; gap: 6px; align-items: center; margin-top: 6px; }
+  .ch-edit input {
+    width: 90px; padding: 4px 8px; border-radius: 6px; font-size: 14px; font-weight: 600;
+    border: 1px solid #334155; background: #0f172a; color: #e2e8f0;
+  }
+  .ch-edit button { padding: 4px 10px; font-size: 13px; }
+  .badge-custom { display:inline-block; padding:1px 6px; border-radius:999px; font-size:11px;
+    background:#1e3a5f; color:#93c5fd; margin-left:4px; vertical-align:middle; }
 </style>
 </head>
 <body>
@@ -56,7 +64,19 @@
 
   <div class="card">
     <div class="grid">
-      <div class="stat"><div class="label">目标渠道</div><div class="value" id="s-channel">—</div></div>
+      <div class="stat">
+        <div class="label">目标渠道</div>
+        <div class="value" id="s-channel">—</div>
+        <div class="ch-edit" id="ch-edit-row" style="display:none">
+          <input type="number" id="ch-input" min="1" placeholder="渠道ID" />
+          <button id="btn-ch-save" style="background:#16a34a">保存</button>
+          <button id="btn-ch-cancel" class="secondary">取消</button>
+        </div>
+        <div style="margin-top:4px">
+          <span class="muted" style="font-size:12px;cursor:pointer;text-decoration:underline" id="ch-edit-link">编辑</span>
+          <span class="muted" style="font-size:12px;margin-left:8px;cursor:pointer;text-decoration:underline;display:none" id="ch-reset-link">重置默认</span>
+        </div>
+      </div>
       <div class="stat"><div class="label">当前状态</div><div class="value"><span id="s-status" class="badge b-unknown">—</span></div></div>
       <div class="stat"><div class="label">Key 进度</div><div class="value" id="s-progress">—</div></div>
       <div class="stat"><div class="label">剩余可用</div><div class="value" id="s-remaining">—</div></div>
@@ -124,7 +144,9 @@ async function refresh() {
     const r = await fetch(`api/instance/${idx}/status`, { headers: { 'Accept': 'application/json' } });
     if (!r.ok) throw new Error('HTTP ' + r.status);
     const d = await r.json();
-    document.getElementById('s-channel').textContent = '#' + d.channel_id;
+    const chLabel = '#' + d.channel_id + (d.is_custom_channel ? '<span class="badge-custom">自定义</span>' : '');
+    document.getElementById('s-channel').innerHTML = chLabel;
+    document.getElementById('ch-reset-link').style.display = d.is_custom_channel ? 'inline' : 'none';
     const [text, cls] = statusBadge(d.last_status);
     const badge = document.getElementById('s-status');
     badge.textContent = text;
@@ -202,6 +224,35 @@ async function rotateNow() {
 document.getElementById('btn-submit').addEventListener('click', submitKeys);
 document.getElementById('btn-append').addEventListener('click', appendKeys);
 document.getElementById('btn-rotate').addEventListener('click', rotateNow);
+
+document.getElementById('ch-edit-link').addEventListener('click', () => {
+  document.getElementById('ch-edit-row').style.display = 'flex';
+  document.getElementById('ch-edit-link').style.display = 'none';
+});
+document.getElementById('btn-ch-cancel').addEventListener('click', () => {
+  document.getElementById('ch-edit-row').style.display = 'none';
+  document.getElementById('ch-edit-link').style.display = 'inline';
+  document.getElementById('ch-input').value = '';
+});
+document.getElementById('btn-ch-save').addEventListener('click', async () => {
+  const val = parseInt(document.getElementById('ch-input').value, 10);
+  if (!val || val <= 0) return;
+  await fetch(`api/instance/${activeIdx}/channel-id`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ channel_id: val })
+  });
+  document.getElementById('ch-edit-row').style.display = 'none';
+  document.getElementById('ch-edit-link').style.display = 'inline';
+  document.getElementById('ch-input').value = '';
+  refresh();
+});
+document.getElementById('ch-reset-link').addEventListener('click', async () => {
+  await fetch(`api/instance/${activeIdx}/channel-id`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ channel_id: 0 })
+  });
+  refresh();
+});
 
 (async () => {
   try {

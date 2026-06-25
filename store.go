@@ -15,10 +15,11 @@ import (
 // so that submitting keys via the web console survives container restarts without
 // touching any file by hand.
 type poolState struct {
-	Keys        []string `json:"keys"`        // ordered backup keys (no duplicates, no blanks)
-	Index       int      `json:"index"`       // next key to apply on the next auto-disable
-	Fingerprint string   `json:"fingerprint"` // sha256 prefix of the key set, used to detect replacement
-	Exhausted   bool     `json:"exhausted"`   // true once every key has been tried and the pool ran out
+	Keys            []string `json:"keys"`
+	Index           int      `json:"index"`
+	Fingerprint     string   `json:"fingerprint"`
+	Exhausted       bool     `json:"exhausted"`
+	ChannelOverride int      `json:"channel_override,omitempty"` // 0 = use env default
 }
 
 // Store guards the key pool and its rotation progress. Both the HTTP console and
@@ -192,6 +193,24 @@ func parseKeys(raw string) []string {
 func fingerprint(keys []string) string {
 	h := sha256.Sum256([]byte(strings.Join(keys, "\n")))
 	return hex.EncodeToString(h[:])[:12]
+}
+
+// ChannelID returns the active channel ID: the stored override if set, otherwise defaultID.
+func (s *Store) ChannelID(defaultID int) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.st.ChannelOverride > 0 {
+		return s.st.ChannelOverride
+	}
+	return defaultID
+}
+
+// SetChannelOverride persists a custom channel ID. Pass 0 to revert to the env default.
+func (s *Store) SetChannelOverride(id int) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.st.ChannelOverride = id
+	return s.persistLocked()
 }
 
 // maskKey reveals only the last 4 characters so the console never exposes secrets.
