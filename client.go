@@ -106,6 +106,19 @@ func (c *Client) GetChannel(ctx context.Context, id int) (status int, channel ma
 	return int(s), channel, nil
 }
 
+// ReEnableChannel sets the channel status back to enabled without changing the key.
+// Used to test whether an auto-disable was transient before committing to key rotation.
+func (c *Client) ReEnableChannel(ctx context.Context, channel map[string]any) error {
+	channel["status"] = channelStatusEnabled
+	delete(channel, "channel_info")
+	body, err := json.Marshal(channel)
+	if err != nil {
+		return err
+	}
+	_, err = c.do(ctx, http.MethodPut, "/api/channel/", body)
+	return err
+}
+
 // ApplyKeyAndEnable replaces the channel key and re-enables it via a read-modify-write
 // PUT, reusing the channel object returned by GetChannel. new-api treats a non-empty
 // key on a single-key channel as a replacement and re-runs abilities + cache refresh.

@@ -13,13 +13,14 @@ type Rotator struct {
 	cfg      *Config
 	client   *Client
 	store    *Store
-	onRotate func(newIndex int) // called after successful rotation; wires cross-instance sync
+	onRotate func(newIndex int)
 
 	mu               sync.Mutex
 	lastStatus       int
 	lastAction       string
 	lastError        string
 	lastChecked      time.Time
+	pendingRotation  bool  // true after first re-enable attempt; auto-disable again means real rotation
 	warnedEmpty      bool
 	channelUsedQuota int64
 	channelBalance   float64
@@ -62,8 +63,41 @@ func (r *Rotator) tick(ctx context.Context) {
 	r.recordStatus(status, channel)
 
 	if status != channelStatusAutoDisabled {
+		r.mu.Lock()
+		if r.pendingRotation {
+			r.pendingRotation = false
+			r.mu.Unlock()
+			log.Printf("INFO channel #%d recovered after re-enable — key is still valid, no rotation", chID)
+		} else {
+			r.mu.Unlock()
+		}
 		return
 	}
+
+	// Channel is auto-disabled.
+	r.mu.Lock()
+	pending := r.pendingRotation
+	r.mu.Unlock()
+
+	if !pending {
+		// First time seeing auto-disable: re-enable with the same key before rotating.
+		if err := r.client.ReEnableChannel(ctx, channel); err != nil {
+			r.recordError("re-enable: " + err.Error())
+			log.Printf("ERROR channel #%d re-enable with same key: %v", chID, err)
+			return
+		}
+		r.mu.Lock()
+		r.pendingRotation = true
+		r.mu.Unlock()
+		r.recordAction("auto-disabled → re-enabled same key (will rotate if disabled again)")
+		log.Printf("INFO channel #%d auto-disabled → re-enabled same key, watching next cycle", chID)
+		return
+	}
+
+	// Still auto-disabled after re-enable attempt: key is genuinely bad, rotate.
+	r.mu.Lock()
+	r.pendingRotation = false
+	r.mu.Unlock()
 
 	next, idx, ok := r.store.PeekNext()
 	if !ok {
@@ -92,7 +126,7 @@ func (r *Rotator) tick(ctx context.Context) {
 	r.mu.Lock()
 	r.warnedEmpty = false
 	r.mu.Unlock()
-	log.Printf("INFO channel #%d auto-disabled → applied key %d/%d (%s) and re-enabled", chID, idx+1, total, maskKey(next))
+	log.Printf("INFO channel #%d auto-disabled again → applied key %d/%d (%s) and re-enabled", chID, idx+1, total, maskKey(next))
 
 	if r.onRotate != nil {
 		newIdx := r.store.Snapshot().Index
