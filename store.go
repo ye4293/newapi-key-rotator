@@ -109,29 +109,6 @@ func (s *Store) AppendKeys(raw string) (int, error) {
 	return added, nil
 }
 
-// KeyAt returns the key at position idx without changing state.
-func (s *Store) KeyAt(idx int) (string, bool) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if idx < 0 || idx >= len(s.st.Keys) {
-		return "", false
-	}
-	return s.st.Keys[idx], true
-}
-
-// SyncToIndex sets the pool index to idx (used when a peer instance just rotated).
-// idx is the new index after the peer's CommitAdvance, so the peer applied key[idx-1].
-func (s *Store) SyncToIndex(idx int) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if idx < 0 || idx > len(s.st.Keys) {
-		return fmt.Errorf("sync index %d out of range (pool size %d)", idx, len(s.st.Keys))
-	}
-	s.st.Index = idx
-	s.st.Exhausted = idx >= len(s.st.Keys)
-	return s.persistLocked()
-}
-
 // PeekNext returns the next key to apply without advancing. ok is false when the
 // pool is empty or already exhausted.
 func (s *Store) PeekNext() (key string, index int, ok bool) {
