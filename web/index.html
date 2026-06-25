@@ -29,6 +29,7 @@
   .badge { display: inline-block; padding: 2px 10px; border-radius: 999px; font-size: 13px; font-weight: 600; }
   .b-on { background: #064e3b; color: #6ee7b7; }
   .b-auto { background: #7c2d12; color: #fdba74; }
+  .b-freeze { background: #312e81; color: #a5b4fc; }
   .b-manual { background: #334155; color: #cbd5e1; }
   .b-unknown { background: #334155; color: #94a3b8; }
   textarea {
@@ -108,7 +109,8 @@
 let instances = [];
 let activeIdx = 0;
 
-const statusBadge = (s) => {
+const statusBadge = (s, pending) => {
+  if (pending) return ['冻结观察中', 'b-freeze'];
   switch (s) {
     case 1: return ['启用', 'b-on'];
     case 2: return ['手动禁用', 'b-manual'];
@@ -147,7 +149,7 @@ async function refresh() {
     const chLabel = '#' + d.channel_id + (d.is_custom_channel ? '<span class="badge-custom">自定义</span>' : '');
     document.getElementById('s-channel').innerHTML = chLabel;
     document.getElementById('ch-reset-link').style.display = d.is_custom_channel ? 'inline' : 'none';
-    const [text, cls] = statusBadge(d.last_status);
+    const [text, cls] = statusBadge(d.last_status, d.pending_rotation);
     const badge = document.getElementById('s-status');
     badge.textContent = text;
     badge.className = 'badge ' + cls;

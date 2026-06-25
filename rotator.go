@@ -164,6 +164,7 @@ type Status struct {
 	DefaultChannelID int          `json:"default_channel_id"`
 	IsCustomChannel  bool         `json:"is_custom_channel"`
 	LastStatus       int          `json:"last_status"`
+	PendingRotation  bool         `json:"pending_rotation"`
 	LastAction       string       `json:"last_action"`
 	LastError        string       `json:"last_error"`
 	LastChecked      string       `json:"last_checked"`
@@ -185,6 +186,7 @@ func (r *Rotator) Status() Status {
 		DefaultChannelID: r.instCfg.ChannelID,
 		IsCustomChannel:  effective != r.instCfg.ChannelID,
 		LastStatus:       r.lastStatus,
+		PendingRotation:  r.pendingRotation,
 		LastAction:       r.lastAction,
 		LastError:        r.lastError,
 		LastChecked:      checked,
