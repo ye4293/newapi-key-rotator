@@ -16,11 +16,12 @@ type Rotator struct {
 	onRotate func(newIndex int)
 
 	mu               sync.Mutex
+	paused           bool
 	lastStatus       int
 	lastAction       string
 	lastError        string
 	lastChecked      time.Time
-	pendingRotation  bool  // true after first re-enable attempt; auto-disable again means real rotation
+	pendingRotation  bool
 	warnedEmpty      bool
 	channelUsedQuota int64
 	channelBalance   float64
@@ -30,10 +31,18 @@ func NewRotator(instCfg *InstanceConfig, cfg *Config, client *Client, store *Sto
 	return &Rotator{instCfg: instCfg, cfg: cfg, client: client, store: store}
 }
 
-// SetOnRotate registers a callback invoked (in a goroutine) after each successful key rotation.
-// newIndex is the store index after CommitAdvance — the applied key was at newIndex-1.
-func (r *Rotator) SetOnRotate(fn func(newIndex int)) {
-	r.onRotate = fn
+func (r *Rotator) SetOnRotate(fn func(newIndex int)) { r.onRotate = fn }
+
+func (r *Rotator) Pause() {
+	r.mu.Lock()
+	r.paused = true
+	r.mu.Unlock()
+}
+
+func (r *Rotator) Resume() {
+	r.mu.Lock()
+	r.paused = false
+	r.mu.Unlock()
 }
 
 func (r *Rotator) Run(ctx context.Context, trigger <-chan struct{}) {
@@ -53,6 +62,12 @@ func (r *Rotator) Run(ctx context.Context, trigger <-chan struct{}) {
 }
 
 func (r *Rotator) tick(ctx context.Context) {
+	r.mu.Lock()
+	paused := r.paused
+	r.mu.Unlock()
+	if paused {
+		return
+	}
 	chID := r.store.ChannelID(r.instCfg.ChannelID)
 	status, channel, err := r.client.GetChannel(ctx, chID)
 	if err != nil {
@@ -163,6 +178,7 @@ type Status struct {
 	ChannelID        int          `json:"channel_id"`
 	DefaultChannelID int          `json:"default_channel_id"`
 	IsCustomChannel  bool         `json:"is_custom_channel"`
+	Paused           bool         `json:"paused"`
 	LastStatus       int          `json:"last_status"`
 	PendingRotation  bool         `json:"pending_rotation"`
 	LastAction       string       `json:"last_action"`
@@ -185,6 +201,7 @@ func (r *Rotator) Status() Status {
 		ChannelID:        effective,
 		DefaultChannelID: r.instCfg.ChannelID,
 		IsCustomChannel:  effective != r.instCfg.ChannelID,
+		Paused:           r.paused,
 		LastStatus:       r.lastStatus,
 		PendingRotation:  r.pendingRotation,
 		LastAction:       r.lastAction,

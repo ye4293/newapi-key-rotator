@@ -30,6 +30,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/instance/{idx}/keys/append", s.handleInstanceKeysAppend)
 	mux.HandleFunc("/api/instance/{idx}/rotate-now", s.handleInstanceRotateNow)
 	mux.HandleFunc("/api/instance/{idx}/channel-id", s.handleInstanceChannelID)
+	mux.HandleFunc("/api/instance/{idx}/pause", s.handleInstancePause)
+	mux.HandleFunc("/api/instance/{idx}/resume", s.handleInstanceResume)
 	// Legacy routes — delegate to instance 0 for backward compatibility.
 	mux.HandleFunc("/api/status", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, s.instances[0].rotator.Status())
@@ -124,6 +126,37 @@ func (s *Server) handleInstanceKeysAppend(w http.ResponseWriter, r *http.Request
 		return
 	}
 	s.keysAppendHandler(w, r, inst)
+}
+
+func (s *Server) handleInstancePause(w http.ResponseWriter, r *http.Request) {
+	inst, ok := s.getInstance(r)
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	inst.rotator.Pause()
+	log.Printf("INFO channel #%d monitoring paused", inst.cfg.ChannelID)
+	writeJSON(w, http.StatusOK, map[string]any{"success": true, "paused": true})
+}
+
+func (s *Server) handleInstanceResume(w http.ResponseWriter, r *http.Request) {
+	inst, ok := s.getInstance(r)
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	inst.rotator.Resume()
+	fireInstance(inst.trigger)
+	log.Printf("INFO channel #%d monitoring resumed", inst.cfg.ChannelID)
+	writeJSON(w, http.StatusOK, map[string]any{"success": true, "paused": false})
 }
 
 func (s *Server) handleInstanceChannelID(w http.ResponseWriter, r *http.Request) {
