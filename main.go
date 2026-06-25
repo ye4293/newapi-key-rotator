@@ -46,6 +46,24 @@ func main() {
 
 	server := NewServer(cfg, instances)
 
+	// Wire cross-instance sync: when any instance rotates, all siblings immediately
+	// apply the same key to their channels so all pools stay in step.
+	for i, inst := range instances {
+		siblings := make([]*instance, 0, len(instances)-1)
+		for j, other := range instances {
+			if j != i {
+				siblings = append(siblings, other)
+			}
+		}
+		inst.rotator.SetOnRotate(func(newIdx int) {
+			syncCtx, cancel := context.WithTimeout(context.Background(), cfg.HTTPTimeout)
+			defer cancel()
+			for _, sib := range siblings {
+				sib.rotator.SyncToIndex(syncCtx, newIdx)
+			}
+		})
+	}
+
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 

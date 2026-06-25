@@ -9,10 +9,11 @@ import (
 )
 
 type Rotator struct {
-	instCfg *InstanceConfig
-	cfg     *Config
-	client  *Client
-	store   *Store
+	instCfg  *InstanceConfig
+	cfg      *Config
+	client   *Client
+	store    *Store
+	onRotate func(newIndex int) // called after successful rotation; wires cross-instance sync
 
 	mu               sync.Mutex
 	lastStatus       int
@@ -26,6 +27,12 @@ type Rotator struct {
 
 func NewRotator(instCfg *InstanceConfig, cfg *Config, client *Client, store *Store) *Rotator {
 	return &Rotator{instCfg: instCfg, cfg: cfg, client: client, store: store}
+}
+
+// SetOnRotate registers a callback invoked (in a goroutine) after each successful key rotation.
+// newIndex is the store index after CommitAdvance — the applied key was at newIndex-1.
+func (r *Rotator) SetOnRotate(fn func(newIndex int)) {
+	r.onRotate = fn
 }
 
 func (r *Rotator) Run(ctx context.Context, trigger <-chan struct{}) {
@@ -86,6 +93,36 @@ func (r *Rotator) tick(ctx context.Context) {
 	r.warnedEmpty = false
 	r.mu.Unlock()
 	log.Printf("INFO channel #%d auto-disabled → applied key %d/%d (%s) and re-enabled", chID, idx+1, total, maskKey(next))
+
+	if r.onRotate != nil {
+		newIdx := r.store.Snapshot().Index
+		go r.onRotate(newIdx)
+	}
+}
+
+// SyncToIndex applies the key at newIndex-1 to this instance's channel and advances
+// the local pool to newIndex. Called when a peer instance just rotated.
+func (r *Rotator) SyncToIndex(ctx context.Context, newIndex int) {
+	key, ok := r.store.KeyAt(newIndex - 1)
+	if !ok {
+		log.Printf("WARN sync: key at index %d not found in pool (size %d)", newIndex-1, r.store.Snapshot().Total)
+		return
+	}
+	chID := r.store.ChannelID(r.instCfg.ChannelID)
+	_, channel, err := r.client.GetChannel(ctx, chID)
+	if err != nil {
+		log.Printf("ERROR sync channel #%d: %v", chID, err)
+		return
+	}
+	if err := r.client.ApplyKeyAndEnable(ctx, channel, key); err != nil {
+		log.Printf("ERROR sync channel #%d apply key: %v", chID, err)
+		return
+	}
+	if err := r.store.SyncToIndex(newIndex); err != nil {
+		log.Printf("ERROR sync pool index to %d: %v", newIndex, err)
+		return
+	}
+	log.Printf("INFO channel #%d synced to key %d/%d (%s)", chID, newIndex, r.store.Snapshot().Total, maskKey(key))
 }
 
 type Status struct {
