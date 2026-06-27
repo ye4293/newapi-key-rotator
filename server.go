@@ -1,8 +1,10 @@
 package main
 
 import (
+	"bytes"
 	"crypto/subtle"
 	_ "embed"
+	"encoding/base64"
 	"encoding/json"
 	"log"
 	"net/http"
@@ -86,7 +88,17 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	_, _ = w.Write(indexHTML)
+	// Inject Basic Auth token so JS fetch calls can authenticate without relying
+	// on the browser's automatic credential forwarding (which varies by browser).
+	token := base64.StdEncoding.EncodeToString(
+		[]byte(s.cfg.WebUsername + ":" + s.cfg.WebPassword),
+	)
+	page := bytes.Replace(indexHTML,
+		[]byte("__AUTH_TOKEN__"),
+		[]byte(token),
+		1,
+	)
+	_, _ = w.Write(page)
 }
 
 func (s *Server) handleInstances(w http.ResponseWriter, r *http.Request) {

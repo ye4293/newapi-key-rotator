@@ -111,6 +111,14 @@
 <script>
 let instances = [];
 let activeIdx = 0;
+const _authHdr = {'Authorization': 'Basic __AUTH_TOKEN__'};
+
+async function apiFetch(url, options = {}) {
+  options.headers = Object.assign({}, options.headers, _authHdr);
+  const r = apiFetch(url, options);
+  if (r.status === 401) { window.location.reload(); throw new Error('auth'); }
+  return r;
+}
 
 const statusBadge = (s, pending, paused) => {
   if (paused)  return ['已暂停', 'b-paused'];
@@ -147,7 +155,7 @@ function renderTabs() {
 async function refresh() {
   const idx = activeIdx;
   try {
-    const r = await fetch(`api/instance/${idx}/status`, { headers: { 'Accept': 'application/json' } });
+    const r = apiFetch(`api/instance/${idx}/status`, { headers: { 'Accept': 'application/json' } });
     if (!r.ok) throw new Error('HTTP ' + r.status);
     const d = await r.json();
     const chLabel = '#' + d.channel_id + (d.is_custom_channel ? '<span class="badge-custom">自定义</span>' : '');
@@ -179,7 +187,7 @@ async function submitKeys() {
   const keys = document.getElementById('keys').value;
   btn.disabled = true; msg.textContent = '保存中…'; msg.className = 'muted';
   try {
-    const r = await fetch(`api/instance/${activeIdx}/keys`, {
+    const r = apiFetch(`api/instance/${activeIdx}/keys`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ keys })
@@ -204,7 +212,7 @@ async function appendKeys() {
   const keys = document.getElementById('keys').value;
   btn.disabled = true; msg.textContent = '追加中…'; msg.className = 'muted';
   try {
-    const r = await fetch(`api/instance/${activeIdx}/keys/append`, {
+    const r = apiFetch(`api/instance/${activeIdx}/keys/append`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ keys })
@@ -226,7 +234,7 @@ async function appendKeys() {
 async function rotateNow() {
   const btn = document.getElementById('btn-rotate');
   btn.disabled = true;
-  try { await fetch(`api/instance/${activeIdx}/rotate-now`, { method: 'POST' }); } catch (e) {}
+  try { apiFetch(`api/instance/${activeIdx}/rotate-now`, { method: 'POST' }); } catch (e) {}
   setTimeout(() => { refresh(); btn.disabled = false; }, 800);
 }
 
@@ -235,14 +243,14 @@ document.getElementById('btn-append').addEventListener('click', appendKeys);
 document.getElementById('btn-rotate').addEventListener('click', rotateNow);
 document.getElementById('btn-delete').addEventListener('click', async () => {
   if (!confirm(`确认删除实例${activeIdx}（渠道 #${instances[activeIdx]?.channel_id}）？\n删除后重启服务生效，不可恢复。`)) return;
-  const r = await fetch(`api/instance/${activeIdx}/delete`, { method: 'POST' }).then(r => r.json()).catch(() => ({}));
+  const r = apiFetch(`api/instance/${activeIdx}/delete`, { method: 'POST' }).then(r => r.json()).catch(() => ({}));
   if (r.success) { alert('已标记删除，重启服务后该实例将不再出现。'); refresh(); }
   else alert('删除失败：' + (r.message || '未知错误'));
 });
-  const d = await fetch(`api/instance/${activeIdx}/status`, { headers: { 'Accept': 'application/json' } })
+  const d = apiFetch(`api/instance/${activeIdx}/status`, { headers: { 'Accept': 'application/json' } })
     .then(r => r.json()).catch(() => ({}));
   const endpoint = d.paused ? 'resume' : 'pause';
-  await fetch(`api/instance/${activeIdx}/${endpoint}`, { method: 'POST' }).catch(() => {});
+  apiFetch(`api/instance/${activeIdx}/${endpoint}`, { method: 'POST' }).catch(() => {});
   setTimeout(refresh, 300);
 });
 
@@ -258,7 +266,7 @@ document.getElementById('btn-ch-cancel').addEventListener('click', () => {
 document.getElementById('btn-ch-save').addEventListener('click', async () => {
   const val = parseInt(document.getElementById('ch-input').value, 10);
   if (!val || val <= 0) return;
-  await fetch(`api/instance/${activeIdx}/channel-id`, {
+  apiFetch(`api/instance/${activeIdx}/channel-id`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ channel_id: val })
   });
@@ -268,7 +276,7 @@ document.getElementById('btn-ch-save').addEventListener('click', async () => {
   refresh();
 });
 document.getElementById('ch-reset-link').addEventListener('click', async () => {
-  await fetch(`api/instance/${activeIdx}/channel-id`, {
+  apiFetch(`api/instance/${activeIdx}/channel-id`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ channel_id: 0 })
   });
@@ -277,7 +285,7 @@ document.getElementById('ch-reset-link').addEventListener('click', async () => {
 
 (async () => {
   try {
-    const r = await fetch('api/instances', { headers: { 'Accept': 'application/json' } });
+    const r = apiFetch('api/instances', { headers: { 'Accept': 'application/json' } });
     instances = await r.json();
   } catch (e) {
     instances = [{ index: 0, channel_id: '?' }];
