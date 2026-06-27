@@ -35,6 +35,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/instance/{idx}/pause", s.handleInstancePause)
 	mux.HandleFunc("/api/instance/{idx}/resume", s.handleInstanceResume)
 	mux.HandleFunc("/api/instance/{idx}/delete", s.handleInstanceDelete)
+	mux.HandleFunc("/api/instance/{idx}/label", s.handleInstanceLabel)
 	// Legacy routes — delegate to instance 0 for backward compatibility.
 	mux.HandleFunc("/api/status", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, s.instances[0].rotator.Status())
@@ -106,10 +107,19 @@ func (s *Server) handleInstances(w http.ResponseWriter, r *http.Request) {
 		Index     int    `json:"index"`
 		BaseURL   string `json:"base_url"`
 		ChannelID int    `json:"channel_id"`
+		Label     string `json:"label"`
 	}
-	infos := make([]instanceInfo, len(s.instances))
+	infos := make([]instanceInfo, 0, len(s.instances))
 	for i, inst := range s.instances {
-		infos[i] = instanceInfo{Index: i, BaseURL: inst.cfg.BaseURL, ChannelID: inst.cfg.ChannelID}
+		if inst.store.IsDeleted() {
+			continue
+		}
+		infos = append(infos, instanceInfo{
+			Index:     i,
+			BaseURL:   inst.cfg.BaseURL,
+			ChannelID: inst.cfg.ChannelID,
+			Label:     inst.store.GetLabel(),
+		})
 	}
 	writeJSON(w, http.StatusOK, infos)
 }
@@ -139,6 +149,33 @@ func (s *Server) handleInstanceKeysAppend(w http.ResponseWriter, r *http.Request
 		return
 	}
 	s.keysAppendHandler(w, r, inst)
+}
+
+func (s *Server) handleInstanceLabel(w http.ResponseWriter, r *http.Request) {
+	inst, ok := s.getInstance(r)
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		writeJSON(w, http.StatusOK, map[string]any{"label": inst.store.GetLabel()})
+	case http.MethodPost:
+		var body struct {
+			Label string `json:"label"`
+		}
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1024)).Decode(&body); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"success": false, "message": "invalid JSON"})
+			return
+		}
+		if err := inst.store.SetLabel(body.Label); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"success": false, "message": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"success": true, "label": body.Label})
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
 }
 
 func (s *Server) handleInstanceDelete(w http.ResponseWriter, r *http.Request) {

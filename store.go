@@ -22,6 +22,7 @@ type poolState struct {
 	ChannelOverride int      `json:"channel_override,omitempty"`
 	Paused          bool     `json:"paused,omitempty"`
 	Deleted         bool     `json:"deleted,omitempty"`
+	Label           string   `json:"label,omitempty"`
 }
 
 // Store guards the key pool and its rotation progress. Both the HTTP console and
@@ -242,6 +243,21 @@ func (s *Store) SetDeleted(v bool) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.st.Deleted = v
+	return s.persistLocked()
+}
+
+// GetLabel returns the display label for this instance.
+func (s *Store) GetLabel() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.st.Label
+}
+
+// SetLabel persists a display label for this instance.
+func (s *Store) SetLabel(label string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.st.Label = label
 	return s.persistLocked()
 }
 

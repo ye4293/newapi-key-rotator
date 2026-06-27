@@ -57,12 +57,22 @@
   .ch-edit button { padding: 4px 10px; font-size: 13px; }
   .badge-custom { display:inline-block; padding:1px 6px; border-radius:999px; font-size:11px;
     background:#1e3a5f; color:#93c5fd; margin-left:4px; vertical-align:middle; }
+  .label-row { display:flex; gap:6px; align-items:center; margin-bottom:16px; }
+  .label-row input {
+    flex:1; padding:6px 10px; border-radius:8px; font-size:14px;
+    border:1px solid #334155; background:#1e293b; color:#e2e8f0;
+  }
+  .label-row button { padding:6px 14px; font-size:13px; }
 </style>
 </head>
 <body>
 <div class="wrap">
   <h1>new-api Key 轮换控制台</h1>
   <div class="tabs" id="tab-bar"></div>
+  <div class="label-row">
+    <input type="text" id="label-input" placeholder="为当前实例添加备注名…" maxlength="40" />
+    <button id="btn-label-save" class="secondary">保存备注</button>
+  </div>
 
   <div class="card">
     <div class="grid">
@@ -140,16 +150,39 @@ function formatQuota(q) {
   return parseFloat(q.toFixed(2)).toString();
 }
 
+async function reloadInstances() {
+  try {
+    const r = await apiFetch('api/instances', { headers: { 'Accept': 'application/json' } });
+    instances = await r.json();
+  } catch (e) {
+    instances = [];
+  }
+  if (instances.length > 0 && !instances.find(inst => inst.index === activeIdx)) {
+    activeIdx = instances[0].index;
+  }
+  renderTabs();
+  refresh();
+}
+
 function renderTabs() {
   const bar = document.getElementById('tab-bar');
   bar.innerHTML = '';
-  instances.forEach((inst, i) => {
+  instances.forEach((inst) => {
     const btn = document.createElement('button');
-    btn.className = 'tab-btn' + (i === activeIdx ? ' active' : '');
-    btn.textContent = `实例${i} · #${inst.channel_id}`;
-    btn.onclick = () => { activeIdx = i; renderTabs(); refresh(); };
+    const isActive = inst.index === activeIdx;
+    btn.className = 'tab-btn' + (isActive ? ' active' : '');
+    btn.textContent = inst.label ? `${inst.label} · #${inst.channel_id}` : `实例${inst.index} · #${inst.channel_id}`;
+    btn.onclick = () => {
+      activeIdx = inst.index;
+      document.getElementById('label-input').value = inst.label || '';
+      renderTabs();
+      refresh();
+    };
     bar.appendChild(btn);
   });
+  // 同步备注输入框
+  const cur = instances.find(inst => inst.index === activeIdx);
+  document.getElementById('label-input').value = cur?.label || '';
 }
 
 async function refresh() {
@@ -242,10 +275,20 @@ document.getElementById('btn-append').addEventListener('click', appendKeys);
 document.getElementById('btn-rotate').addEventListener('click', rotateNow);
 
 document.getElementById('btn-delete').addEventListener('click', async () => {
-  if (!confirm(`确认删除实例${activeIdx}（渠道 #${instances[activeIdx]?.channel_id}）？\n删除后重启服务生效，不可恢复。`)) return;
+  const cur = instances.find(inst => inst.index === activeIdx);
+  if (!confirm(`确认删除实例${activeIdx}（渠道 #${cur?.channel_id}）？`)) return;
   const r = await apiFetch(`api/instance/${activeIdx}/delete`, { method: 'POST' }).then(r => r.json()).catch(() => ({}));
-  if (r.success) { alert('已标记删除，重启服务后该实例将不再出现。'); refresh(); }
+  if (r.success) { await reloadInstances(); }
   else alert('删除失败：' + (r.message || '未知错误'));
+});
+
+document.getElementById('btn-label-save').addEventListener('click', async () => {
+  const label = document.getElementById('label-input').value.trim();
+  await apiFetch(`api/instance/${activeIdx}/label`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ label })
+  });
+  await reloadInstances();
 });
 
 document.getElementById('btn-pause').addEventListener('click', async () => {
@@ -286,14 +329,7 @@ document.getElementById('ch-reset-link').addEventListener('click', async () => {
 });
 
 (async () => {
-  try {
-    const r = await apiFetch('api/instances', { headers: { 'Accept': 'application/json' } });
-    instances = await r.json();
-  } catch (e) {
-    instances = [{ index: 0, channel_id: '?' }];
-  }
-  renderTabs();
-  refresh();
+  await reloadInstances();
   setInterval(() => refresh(), 5000);
 })();
 </script>
