@@ -32,6 +32,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/instance/{idx}/channel-id", s.handleInstanceChannelID)
 	mux.HandleFunc("/api/instance/{idx}/pause", s.handleInstancePause)
 	mux.HandleFunc("/api/instance/{idx}/resume", s.handleInstanceResume)
+	mux.HandleFunc("/api/instance/{idx}/delete", s.handleInstanceDelete)
 	// Legacy routes — delegate to instance 0 for backward compatibility.
 	mux.HandleFunc("/api/status", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, s.instances[0].rotator.Status())
@@ -126,6 +127,25 @@ func (s *Server) handleInstanceKeysAppend(w http.ResponseWriter, r *http.Request
 		return
 	}
 	s.keysAppendHandler(w, r, inst)
+}
+
+func (s *Server) handleInstanceDelete(w http.ResponseWriter, r *http.Request) {
+	inst, ok := s.getInstance(r)
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	inst.rotator.Pause()
+	if err := inst.store.SetDeleted(true); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"success": false, "message": err.Error()})
+		return
+	}
+	log.Printf("INFO channel #%d marked as deleted (will be skipped on next restart)", inst.cfg.ChannelID)
+	writeJSON(w, http.StatusOK, map[string]any{"success": true, "message": "实例已标记删除，重启后生效"})
 }
 
 func (s *Server) handleInstancePause(w http.ResponseWriter, r *http.Request) {

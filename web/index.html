@@ -89,6 +89,7 @@
     <div class="row">
       <button class="secondary" id="btn-rotate" type="button">立即检查</button>
       <button id="btn-pause" type="button" class="secondary">暂停监控</button>
+      <button id="btn-delete" type="button" style="background:#dc2626">删除实例</button>
       <span class="muted" id="s-action"></span>
     </div>
     <div class="row"><span class="err" id="s-error"></span></div>
@@ -232,7 +233,12 @@ async function rotateNow() {
 document.getElementById('btn-submit').addEventListener('click', submitKeys);
 document.getElementById('btn-append').addEventListener('click', appendKeys);
 document.getElementById('btn-rotate').addEventListener('click', rotateNow);
-document.getElementById('btn-pause').addEventListener('click', async () => {
+document.getElementById('btn-delete').addEventListener('click', async () => {
+  if (!confirm(`确认删除实例${activeIdx}（渠道 #${instances[activeIdx]?.channel_id}）？\n删除后重启服务生效，不可恢复。`)) return;
+  const r = await fetch(`api/instance/${activeIdx}/delete`, { method: 'POST' }).then(r => r.json()).catch(() => ({}));
+  if (r.success) { alert('已标记删除，重启服务后该实例将不再出现。'); refresh(); }
+  else alert('删除失败：' + (r.message || '未知错误'));
+});
   const d = await fetch(`api/instance/${activeIdx}/status`, { headers: { 'Accept': 'application/json' } })
     .then(r => r.json()).catch(() => ({}));
   const endpoint = d.paused ? 'resume' : 'pause';

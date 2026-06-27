@@ -19,7 +19,9 @@ type poolState struct {
 	Index           int      `json:"index"`
 	Fingerprint     string   `json:"fingerprint"`
 	Exhausted       bool     `json:"exhausted"`
-	ChannelOverride int      `json:"channel_override,omitempty"` // 0 = use env default
+	ChannelOverride int      `json:"channel_override,omitempty"`
+	Paused          bool     `json:"paused,omitempty"`
+	Deleted         bool     `json:"deleted,omitempty"`
 }
 
 // Store guards the key pool and its rotation progress. Both the HTTP console and
@@ -210,6 +212,36 @@ func (s *Store) SetChannelOverride(id int) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.st.ChannelOverride = id
+	return s.persistLocked()
+}
+
+// GetPaused returns the persisted paused state.
+func (s *Store) GetPaused() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.st.Paused
+}
+
+// SetPaused persists the paused state.
+func (s *Store) SetPaused(v bool) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.st.Paused = v
+	return s.persistLocked()
+}
+
+// IsDeleted reports whether this instance has been soft-deleted.
+func (s *Store) IsDeleted() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.st.Deleted
+}
+
+// SetDeleted marks this instance as deleted and persists it.
+func (s *Store) SetDeleted(v bool) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.st.Deleted = v
 	return s.persistLocked()
 }
 

@@ -27,19 +27,27 @@ type Rotator struct {
 }
 
 func NewRotator(instCfg *InstanceConfig, cfg *Config, client *Client, store *Store) *Rotator {
-	return &Rotator{instCfg: instCfg, cfg: cfg, client: client, store: store}
+	return &Rotator{
+		instCfg: instCfg,
+		cfg:     cfg,
+		client:  client,
+		store:   store,
+		paused:  store.GetPaused(),
+	}
 }
 
 func (r *Rotator) Pause() {
 	r.mu.Lock()
 	r.paused = true
 	r.mu.Unlock()
+	_ = r.store.SetPaused(true)
 }
 
 func (r *Rotator) Resume() {
 	r.mu.Lock()
 	r.paused = false
 	r.mu.Unlock()
+	_ = r.store.SetPaused(false)
 }
 
 func (r *Rotator) Run(ctx context.Context, trigger <-chan struct{}) {

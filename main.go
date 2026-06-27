@@ -28,7 +28,7 @@ func main() {
 		log.Fatalf("config error: %v", err)
 	}
 
-	instances := make([]*instance, len(cfg.Instances))
+	instances := make([]*instance, 0, len(cfg.Instances))
 	for i, instCfg := range cfg.Instances {
 		poolFile := fmt.Sprintf("pool_%d.json", i)
 		if i == 0 {
@@ -38,10 +38,14 @@ func main() {
 		if err != nil {
 			log.Fatalf("store error (instance %d): %v", i, err)
 		}
+		if store.IsDeleted() {
+			log.Printf("INFO instance %d (channel #%d) is deleted — skipping", i, instCfg.ChannelID)
+			continue
+		}
 		client := NewClient(instCfg, cfg)
 		trigger := make(chan struct{}, 1)
 		rotator := NewRotator(instCfg, cfg, client, store)
-		instances[i] = &instance{cfg: instCfg, store: store, rotator: rotator, trigger: trigger}
+		instances = append(instances, &instance{cfg: instCfg, store: store, rotator: rotator, trigger: trigger})
 	}
 
 	server := NewServer(cfg, instances)
