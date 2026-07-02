@@ -46,11 +46,72 @@ INSTANCE_2_ACCESS_TOKEN=sk-admin-yyy
 INSTANCE_2_USER_ID=1             # new-api 必填
 INSTANCE_2_PLATFORM=newapi
 INSTANCE_2_CHANNEL_IDS=15,23
+
+# 管理员账户（完整权限，看所有渠道）
+WEB_USERNAME=admin
+WEB_PASSWORD=admin-secret
+
+# 供货商账户（渠道级权限）
+ACCOUNT_1_PASSWORD=supplier-a-pw
+ACCOUNT_1_CHANNELS=0:42,0:88    # 格式：instIdx:channelID，逗号分隔
+ACCOUNT_1_LABEL=供货商A
+
+ACCOUNT_2_PASSWORD=supplier-b-pw
+ACCOUNT_2_CHANNELS=1:15
+ACCOUNT_2_LABEL=供货商B
 ```
 
 解析逻辑：
 - `CHANNEL_IDS` 优先于 `CHANNEL_ID`（向后兼容）
 - `PLATFORM` 默认为空字符串，日志中显示 `inst-{n}`
+- `ACCOUNT_N_*` 从 N=1 开始连续扫描，空缺则停止
+
+---
+
+## 访问控制设计
+
+### 账户模型
+
+系统有两类账户：
+
+**管理员账户**（通过 `WEB_USERNAME` / `WEB_PASSWORD` 配置）：
+- 查看所有渠道状态
+- 提交/追加 Key
+- 触发立即检查
+- 暂停/恢复监控
+
+**供货商账户**（通过 `ACCOUNT_N_*` 配置）：
+- 仅查看被授权的渠道状态（状态、池剩余量）
+- 仅向被授权的渠道提交/追加 Key
+- **不能**：触发轮换、暂停监控、看其他渠道
+
+### 权限矩阵
+
+| 操作 | 管理员 | 供货商（自己渠道） | 供货商（其他渠道） |
+|------|--------|------------------|------------------|
+| 查看状态 | ✅ | ✅ | ❌ 403 |
+| 提交 Key | ✅ | ✅ | ❌ 403 |
+| 追加 Key | ✅ | ✅ | ❌ 403 |
+| 触发轮换 | ✅ | ❌ 403 | ❌ 403 |
+| 暂停/恢复 | ✅ | ❌ 403 | ❌ 403 |
+
+### 服务端实现要点
+
+- Basic Auth 验证阶段解析密码 → 匹配账户 → 挂到 `gin.Context`
+- 中间件：`resolveAccount()`——从请求头提取账户信息
+- 权限检查：`requireAdmin()` 和 `requireChannelAccess(inst, ch)` 两个守卫函数
+- `GET /api/status`：管理员返回全部，供货商只返回被授权渠道的子集
+- 越权请求返回 `403 Forbidden`，不泄露其他渠道是否存在
+
+### Web 控制台 UI 区分
+
+供货商登录后：
+- 只显示被授权的渠道卡片
+- 无"立即检查"/"暂停"按钮
+- 无其他实例/渠道的任何信息
+
+管理员登录后：
+- 完整控制台，按实例分组显示所有渠道
 
 ---
 
@@ -63,8 +124,12 @@ Config
 ├── Instances []*InstanceConfig
 │   ├── BaseURL, AccessToken, UserID (可选), Platform
 │   └── ChannelIDs []int
+├── Accounts []*AccountConfig       ← 新增
+│   ├── Password, Label
+│   └── Channels []ChannelRef      ← {InstIdx, ChannelID}
+├── AdminUsername, AdminPassword
 ├── DataDir, PollInterval, HTTPTimeout
-└── WebListen, WebUsername, WebPassword
+└── WebListen
 ```
 
 **监控单元** = `(instIdx int, channelID int)` 二元组，对应：
@@ -76,12 +141,13 @@ Config
 
 | 文件 | 变更说明 |
 |------|---------|
-| `config.go` | `ChannelID int` → `ChannelIDs []int`；新增 `Platform string`；`UserID` 改可选 |
+| `config.go` | `ChannelID int` → `ChannelIDs []int`；新增 `Platform string`；`UserID` 改可选；新增 `AccountConfig` 解析 |
 | `client.go` | `do()` 中 `New-Api-User` 头改为条件附加（`userID != ""`） |
 | `store.go` | `NewStore(path)` 不变；调用方传入 `pool-{n}-{id}.json` 路径 |
 | `rotator.go` | 新增 `label string` 字段用于日志标识（`"ezlinkai/ch-42"`）；其余逻辑不变 |
 | `main.go` | 遍历所有 `(inst, channelID)` 对，为每对创建 `Client`/`Rotator`/`Store`，并发 goroutine |
-| `server.go` | 路由加 `?inst=&ch=` 参数；`/api/status` 返回所有单元列表 |
+| `server.go` | 路由加 `?inst=&ch=` 参数；`/api/status` 返回所有单元列表；新增 `resolveAccount()` 中间件和权限守卫 |
+| `auth.go` | 新文件：`resolveAccount()`、`requireAdmin()`、`requireChannelAccess()` |
 
 ---
 
@@ -145,15 +211,23 @@ tick(instIdx, channelID):
 
 ## Web 控制台 UI
 
-现有单页面改为按实例分组展示：
+管理员登录后，按实例分组展示所有渠道：
 
 ```
 [ezlinkai]
-  渠道 #42  状态: 启用  当前Key: ****1234  池: 3/5  [提交Key] [立即检查]
-  渠道 #88  状态: 自动禁用  池: 0/0 (已耗尽)  [提交Key]
+  渠道 #42  状态: 启用  当前Key: ****1234  池: 3/5  [提交Key] [立即检查] [暂停]
+  渠道 #88  状态: 自动禁用  池: 0/0 (已耗尽)  [提交Key] [立即检查] [暂停]
 
 [newapi]
-  渠道 #15  状态: 启用  当前Key: ****abcd  池: 8/10  [提交Key] [立即检查]
+  渠道 #15  状态: 启用  当前Key: ****abcd  池: 8/10  [提交Key] [立即检查] [暂停]
+```
+
+供货商（如供货商A，授权渠道 0:42, 0:88）登录后：
+
+```
+[供货商A]
+  渠道 #42  状态: 启用  当前Key: ****1234  池: 3/5  [提交Key]
+  渠道 #88  状态: 自动禁用  池: 0/0 (已耗尽)  [提交Key]
 ```
 
 ---
