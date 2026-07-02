@@ -66,6 +66,15 @@
 </style>
 </head>
 <body>
+<div id="login-overlay" style="display:none;position:fixed;inset:0;background:#0f172a;z-index:100;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px">
+  <h2 style="margin:0;font-size:20px;color:#e2e8f0">Key 轮换控制台</h2>
+  <div style="width:300px;display:flex;flex-direction:column;gap:12px">
+    <input id="login-password" type="password" placeholder="输入密码" autocomplete="current-password"
+      style="padding:12px;border-radius:8px;border:1px solid #334155;background:#1e293b;color:#e2e8f0;font-size:16px;width:100%;box-sizing:border-box" />
+    <button id="login-btn" style="padding:12px;border-radius:8px;border:none;background:#2563eb;color:#fff;font-size:16px;font-weight:600;cursor:pointer">登录</button>
+    <div id="login-error" style="color:#fca5a5;font-size:14px;text-align:center;min-height:20px"></div>
+  </div>
+</div>
 <div class="wrap">
   <h1>new-api Key 轮换控制台</h1>
   <div class="tabs" id="tab-bar"></div>
@@ -122,13 +131,42 @@
 let isAdmin = true;
 let instances = [];
 let activeIdx = 0;
-const _authHdr = {'Authorization': 'Basic __AUTH_TOKEN__'};
+let _token = '';
+function _authHdr() { return _token ? {'Authorization': 'Basic ' + _token} : {}; }
 
 async function apiFetch(url, options = {}) {
-  options.headers = Object.assign({}, options.headers, _authHdr);
+  options.headers = Object.assign({}, options.headers, _authHdr());
   const r = await fetch(url, options);
-  if (r.status === 401) { window.location.reload(); throw new Error('auth'); }
+  if (r.status === 401) {
+    showLogin();
+    throw new Error('auth');
+  }
   return r;
+}
+
+function showLogin() {
+  document.getElementById('login-overlay').style.display = 'flex';
+}
+
+function hideLogin() {
+  document.getElementById('login-overlay').style.display = 'none';
+}
+
+async function doLogin(password) {
+  // 用固定用户名 "user" 拼接 Basic Auth token，服务端只校验密码
+  const token = btoa('user:' + password);
+  const r = await fetch('api/me', {
+    headers: { 'Authorization': 'Basic ' + token, 'Accept': 'application/json' }
+  });
+  if (r.status === 401) {
+    document.getElementById('login-error').textContent = '密码错误，请重试';
+    return;
+  }
+  _token = token;
+  document.getElementById('login-error').textContent = '';
+  hideLogin();
+  // 触发主界面初始化
+  await initApp();
 }
 
 const statusBadge = (s, pending, paused) => {
@@ -332,12 +370,14 @@ document.getElementById('ch-reset-link').addEventListener('click', async () => {
   refresh();
 });
 
-(async () => {
+async function initApp() {
   try {
     const r = await apiFetch('api/me', { headers: { 'Accept': 'application/json' } });
     const me = await r.json();
     isAdmin = me.is_admin;
-  } catch(e) {}
+  } catch(e) {
+    return; // auth 失败，showLogin 已被 apiFetch 调用
+  }
 
   if (!isAdmin) {
     document.getElementById('btn-rotate').style.display = 'none';
@@ -347,6 +387,36 @@ document.getElementById('ch-reset-link').addEventListener('click', async () => {
     document.getElementById('ch-edit-link').style.display = 'none';
   }
 
+  await reloadInstances();
+  setInterval(() => refresh(), 5000);
+}
+
+// 登录按钮和回车键
+document.getElementById('login-btn').addEventListener('click', () => {
+  doLogin(document.getElementById('login-password').value);
+});
+document.getElementById('login-password').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') doLogin(document.getElementById('login-password').value);
+});
+
+// 页面启动：先尝试无凭据调用，若 401 则显示登录框
+(async () => {
+  const r = await fetch('api/me', { headers: { 'Accept': 'application/json' } });
+  if (r.status === 401) {
+    showLogin();
+    return;
+  }
+  // WEB_PASSWORD 为空（无保护模式），直接进入主界面
+  _token = '';
+  const me = await r.json();
+  isAdmin = me.is_admin;
+  if (!isAdmin) {
+    document.getElementById('btn-rotate').style.display = 'none';
+    document.getElementById('btn-pause').style.display = 'none';
+    document.getElementById('btn-delete').style.display = 'none';
+    document.getElementById('label-row').style.display = 'none';
+    document.getElementById('ch-edit-link').style.display = 'none';
+  }
   await reloadInstances();
   setInterval(() => refresh(), 5000);
 })();

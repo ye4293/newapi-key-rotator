@@ -67,8 +67,7 @@ func (s *Server) withAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		acc, ok := s.resolveAccount(r)
 		if !ok {
-			w.Header().Set("WWW-Authenticate", `Basic realm="key-rotator"`)
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			writeJSON(w, http.StatusUnauthorized, map[string]any{"success": false, "message": "unauthorized"})
 			return
 		}
 		ctx := context.WithValue(r.Context(), accountContextKey{}, acc)
