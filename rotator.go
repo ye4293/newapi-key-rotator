@@ -163,6 +163,20 @@ func (r *Rotator) tick(ctx context.Context) {
 	r.warnedEmpty = false
 	r.mu.Unlock()
 	log.Printf("INFO [%s] auto-disabled again → applied key %d/%d (%s) and re-enabled", r.label, idx+1, total, maskKey(next))
+
+	// 等待 5 秒后验证 key 是否真正生效，防止 UI 显示"启用"但实际已被再次禁用
+	time.Sleep(5 * time.Second)
+	verifyStatus, _, verifyErr := r.client.GetChannel(ctx, chID)
+	if verifyErr == nil {
+		r.mu.Lock()
+		r.lastStatus = verifyStatus
+		r.lastChecked = time.Now()
+		r.mu.Unlock()
+		if verifyStatus == channelStatusAutoDisabled {
+			r.recordAction(fmt.Sprintf("key %d/%d (%s) rejected immediately — channel re-disabled", idx+1, total, maskKey(next)))
+			log.Printf("WARN [%s] key %d/%d (%s) was re-disabled immediately after apply — bad key", r.label, idx+1, total, maskKey(next))
+		}
+	}
 }
 
 type Status struct {
