@@ -104,6 +104,17 @@ func (r *Rotator) tick(ctx context.Context) {
 	r.mu.Unlock()
 
 	if !pending {
+		// 池已耗尽时跳过重启——重启后还是会被禁用，徒增 API 调用
+		if r.store.Snapshot().Exhausted {
+			r.mu.Lock()
+			warned := r.warnedEmpty
+			r.warnedEmpty = true
+			r.mu.Unlock()
+			if !warned {
+				log.Printf("WARN [%s] auto-disabled and key pool exhausted; waiting for new keys", r.label)
+			}
+			return
+		}
 		// First time seeing auto-disable: re-enable with the same key before rotating.
 		if err := r.client.ReEnableChannel(ctx, channel); err != nil {
 			r.recordError("re-enable: " + err.Error())
@@ -119,12 +130,9 @@ func (r *Rotator) tick(ctx context.Context) {
 	}
 
 	// Still auto-disabled after re-enable attempt: key is genuinely bad, rotate.
-	r.mu.Lock()
-	r.pendingRotation = false
-	r.mu.Unlock()
-
 	next, idx, ok := r.store.PeekNext()
 	if !ok {
+		// 池耗尽：保持 pendingRotation=true，防止下次轮询再触发无效重启
 		r.recordAction("pool exhausted — channel left auto-disabled")
 		r.mu.Lock()
 		warned := r.warnedEmpty
@@ -135,6 +143,10 @@ func (r *Rotator) tick(ctx context.Context) {
 		}
 		return
 	}
+
+	r.mu.Lock()
+	r.pendingRotation = false
+	r.mu.Unlock()
 
 	if err := r.client.ApplyKeyAndEnable(ctx, channel, next); err != nil {
 		r.recordError("apply key: " + err.Error())
