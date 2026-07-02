@@ -49,7 +49,7 @@ func main() {
 			}
 			client := NewClient(instCfg, cfg)
 			trigger := make(chan struct{}, 1)
-			rotator := NewRotator(label, instCfg, cfg, client, store)
+			rotator := NewRotator(label, chID, instCfg, cfg, client, store)
 			instances = append(instances, &instance{
 				instIdx:   i,
 				channelID: chID,

@@ -9,8 +9,9 @@ import (
 )
 
 type Rotator struct {
-	label   string // 日志标识，如 "ezlinkai/ch-42"
-	instCfg  *InstanceConfig
+	label     string // 日志标识，如 "ezlinkai/ch-42"
+	channelID int    // 该 Rotator 实际监控的渠道 ID
+	instCfg   *InstanceConfig
 	cfg      *Config
 	client   *Client
 	store    *Store
@@ -27,14 +28,15 @@ type Rotator struct {
 	channelBalance   float64
 }
 
-func NewRotator(label string, instCfg *InstanceConfig, cfg *Config, client *Client, store *Store) *Rotator {
+func NewRotator(label string, channelID int, instCfg *InstanceConfig, cfg *Config, client *Client, store *Store) *Rotator {
 	return &Rotator{
-		label:   label,
-		instCfg: instCfg,
-		cfg:     cfg,
-		client:  client,
-		store:   store,
-		paused:  store.GetPaused(),
+		label:     label,
+		channelID: channelID,
+		instCfg:   instCfg,
+		cfg:       cfg,
+		client:    client,
+		store:     store,
+		paused:    store.GetPaused(),
 	}
 }
 
@@ -75,7 +77,7 @@ func (r *Rotator) tick(ctx context.Context) {
 	if paused {
 		return
 	}
-	chID := r.store.ChannelID(r.instCfg.ChannelIDs[0])
+	chID := r.store.ChannelID(r.channelID)
 	status, channel, err := r.client.GetChannel(ctx, chID)
 	if err != nil {
 		r.recordError("get channel: " + err.Error())
@@ -173,11 +175,11 @@ func (r *Rotator) Status() Status {
 	if !r.lastChecked.IsZero() {
 		checked = r.lastChecked.Format(time.RFC3339)
 	}
-	effective := r.store.ChannelID(r.instCfg.ChannelIDs[0])
+	effective := r.store.ChannelID(r.channelID)
 	return Status{
 		ChannelID:        effective,
-		DefaultChannelID: r.instCfg.ChannelIDs[0],
-		IsCustomChannel:  effective != r.instCfg.ChannelIDs[0],
+		DefaultChannelID: r.channelID,
+		IsCustomChannel:  effective != r.channelID,
 		Paused:           r.paused,
 		LastStatus:       r.lastStatus,
 		PendingRotation:  r.pendingRotation,

@@ -130,6 +130,22 @@ func LoadConfig() (*Config, error) {
 		}
 	}
 
+	// 校验所有账户密码唯一（防止供货商密码与管理员或其他供货商相同导致权限混淆）
+	allPasswords := make(map[string]string) // password -> label
+	if c.WebPassword != "" {
+		allPasswords[c.WebPassword] = "管理员(" + c.WebUsername + ")"
+	}
+	for n, acc := range c.Accounts {
+		label := acc.Label
+		if label == "" {
+			label = fmt.Sprintf("ACCOUNT_%d", n+1)
+		}
+		if existing, dup := allPasswords[acc.Password]; dup {
+			return nil, fmt.Errorf("ACCOUNT_%d_PASSWORD 与 %q 密码相同，所有账户密码必须唯一", n+1, existing)
+		}
+		allPasswords[acc.Password] = label
+	}
+
 	return c, nil
 }
 
