@@ -183,6 +183,10 @@ func TestLoadConfig_Accounts(t *testing.T) {
 	os.Setenv("NEWAPI_BASE_URL", "https://example.com")
 	os.Setenv("NEWAPI_ACCESS_TOKEN", "tok")
 	os.Setenv("CHANNEL_ID", "1")
+	// 配置第二个实例，使 ACCOUNT_2_CHANNELS 中的 instIdx=1 合法
+	os.Setenv("INSTANCE_2_BASE_URL", "https://example2.com")
+	os.Setenv("INSTANCE_2_ACCESS_TOKEN", "tok2")
+	os.Setenv("INSTANCE_2_CHANNEL_ID", "2")
 	os.Setenv("ACCOUNT_1_PASSWORD", "pw-a")
 	os.Setenv("ACCOUNT_1_CHANNELS", "0:42,0:88")
 	os.Setenv("ACCOUNT_1_LABEL", "供货商A")
@@ -192,6 +196,7 @@ func TestLoadConfig_Accounts(t *testing.T) {
 	defer func() {
 		for _, k := range []string{
 			"NEWAPI_BASE_URL", "NEWAPI_ACCESS_TOKEN", "CHANNEL_ID",
+			"INSTANCE_2_BASE_URL", "INSTANCE_2_ACCESS_TOKEN", "INSTANCE_2_CHANNEL_ID",
 			"ACCOUNT_1_PASSWORD", "ACCOUNT_1_CHANNELS", "ACCOUNT_1_LABEL",
 			"ACCOUNT_2_PASSWORD", "ACCOUNT_2_CHANNELS",
 		} {
@@ -265,5 +270,24 @@ func TestLoadConfig_Accounts_invalidChannels(t *testing.T) {
 	_, err := LoadConfig()
 	if err == nil {
 		t.Error("want error for invalid ACCOUNT_1_CHANNELS format")
+	}
+}
+
+func TestLoadConfig_Accounts_instIdxOutOfRange(t *testing.T) {
+	os.Setenv("NEWAPI_BASE_URL", "https://example.com")
+	os.Setenv("NEWAPI_ACCESS_TOKEN", "tok")
+	os.Setenv("CHANNEL_ID", "1")
+	os.Setenv("ACCOUNT_1_PASSWORD", "pw")
+	os.Setenv("ACCOUNT_1_CHANNELS", "5:42") // 只有 1 个实例（instIdx=0），5 越界
+	defer func() {
+		os.Unsetenv("NEWAPI_BASE_URL")
+		os.Unsetenv("NEWAPI_ACCESS_TOKEN")
+		os.Unsetenv("CHANNEL_ID")
+		os.Unsetenv("ACCOUNT_1_PASSWORD")
+		os.Unsetenv("ACCOUNT_1_CHANNELS")
+	}()
+	_, err := LoadConfig()
+	if err == nil {
+		t.Error("want error when instIdx is out of range")
 	}
 }

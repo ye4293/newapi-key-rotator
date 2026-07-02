@@ -38,20 +38,52 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/me", s.handleMe)
 	// Legacy routes — delegate to instance 0 for backward compatibility.
 	mux.HandleFunc("/api/status", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusOK, s.instances[0].rotator.Status())
+		if len(s.instances) == 0 {
+			http.NotFound(w, r)
+			return
+		}
+		inst := s.instances[0]
+		if !s.requireChannelAccess(w, r, inst) {
+			return
+		}
+		writeJSON(w, http.StatusOK, inst.rotator.Status())
 	})
 	mux.HandleFunc("/api/keys", func(w http.ResponseWriter, r *http.Request) {
-		s.keysHandler(w, r, s.instances[0])
+		if len(s.instances) == 0 {
+			http.NotFound(w, r)
+			return
+		}
+		inst := s.instances[0]
+		if !s.requireChannelAccess(w, r, inst) {
+			return
+		}
+		s.keysHandler(w, r, inst)
 	})
 	mux.HandleFunc("/api/keys/append", func(w http.ResponseWriter, r *http.Request) {
-		s.keysAppendHandler(w, r, s.instances[0])
+		if len(s.instances) == 0 {
+			http.NotFound(w, r)
+			return
+		}
+		inst := s.instances[0]
+		if !s.requireChannelAccess(w, r, inst) {
+			return
+		}
+		s.keysAppendHandler(w, r, inst)
 	})
 	mux.HandleFunc("/api/rotate-now", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		fireInstance(s.instances[0].trigger)
+		if len(s.instances) == 0 {
+			http.NotFound(w, r)
+			return
+		}
+		inst := s.instances[0]
+		if !s.requireAdmin(w, r) {
+			return
+		}
+		fireInstance(inst.trigger)
 		writeJSON(w, http.StatusOK, map[string]any{"success": true})
 	})
 	return s.withAuth(mux)

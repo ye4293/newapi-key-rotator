@@ -121,6 +121,15 @@ func LoadConfig() (*Config, error) {
 		c.Accounts = append(c.Accounts, acc)
 	}
 
+	// 校验供货商账户引用的 instIdx 在有效范围内
+	for n, acc := range c.Accounts {
+		for _, ref := range acc.Channels {
+			if ref.InstIdx >= len(c.Instances) {
+				return nil, fmt.Errorf("ACCOUNT_%d_CHANNELS: instIdx %d is out of range (only %d instance(s) configured)", n+1, ref.InstIdx, len(c.Instances))
+			}
+		}
+	}
+
 	return c, nil
 }
 
