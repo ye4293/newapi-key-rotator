@@ -65,6 +65,11 @@ func (s *Server) withAuth(next http.Handler) http.Handler {
 		})
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// 放行根路径，让登录页 HTML 先加载，认证由 JS 处理
+		if r.URL.Path == "/" {
+			next.ServeHTTP(w, r)
+			return
+		}
 		acc, ok := s.resolveAccount(r)
 		if !ok {
 			writeJSON(w, http.StatusUnauthorized, map[string]any{"success": false, "message": "unauthorized"})
