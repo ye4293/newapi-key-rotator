@@ -140,7 +140,7 @@ func (r *Rotator) tick(ctx context.Context) {
 		return
 	}
 	if err := r.store.CommitAdvance(); err != nil {
-		log.Printf("ERROR persist progress after applying key #%d: %v", idx+1, err)
+		log.Printf("ERROR [%s] persist progress after applying key #%d: %v", r.label, idx+1, err)
 	}
 
 	total := r.store.Snapshot().Total
