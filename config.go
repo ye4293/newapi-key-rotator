@@ -105,6 +105,7 @@ func loadInstanceFromEnv(baseURLKey, tokenKey, userIDKey, channelKey, channelIDs
 	if channelIDsRaw != "" {
 		// 解析逗号分隔的多个渠道 ID
 		parts := strings.Split(channelIDsRaw, ",")
+		seen := make(map[int]bool)
 		for _, part := range parts {
 			part = strings.TrimSpace(part)
 			if part == "" {
@@ -114,10 +115,14 @@ func loadInstanceFromEnv(baseURLKey, tokenKey, userIDKey, channelKey, channelIDs
 			if err != nil || id <= 0 {
 				return nil, fmt.Errorf("%s contains invalid channel ID %q: must be a positive integer", channelIDsKey, part)
 			}
+			if seen[id] {
+				continue
+			}
+			seen[id] = true
 			inst.ChannelIDs = append(inst.ChannelIDs, id)
 		}
 		if len(inst.ChannelIDs) == 0 {
-			missing = append(missing, channelIDsKey)
+			return nil, fmt.Errorf("%s is set but contains no valid channel IDs", channelIDsKey)
 		}
 	} else if channelRaw != "" {
 		// 向后兼容：单个渠道 ID
