@@ -178,3 +178,92 @@ func TestLoadConfig_ChannelIDs_priority(t *testing.T) {
 		t.Errorf("CHANNEL_IDS should take priority, want [5 6], got %v", got)
 	}
 }
+
+func TestLoadConfig_Accounts(t *testing.T) {
+	os.Setenv("NEWAPI_BASE_URL", "https://example.com")
+	os.Setenv("NEWAPI_ACCESS_TOKEN", "tok")
+	os.Setenv("CHANNEL_ID", "1")
+	os.Setenv("ACCOUNT_1_PASSWORD", "pw-a")
+	os.Setenv("ACCOUNT_1_CHANNELS", "0:42,0:88")
+	os.Setenv("ACCOUNT_1_LABEL", "供货商A")
+	os.Setenv("ACCOUNT_2_PASSWORD", "pw-b")
+	os.Setenv("ACCOUNT_2_CHANNELS", "1:15")
+	os.Unsetenv("ACCOUNT_2_LABEL")
+	defer func() {
+		for _, k := range []string{
+			"NEWAPI_BASE_URL", "NEWAPI_ACCESS_TOKEN", "CHANNEL_ID",
+			"ACCOUNT_1_PASSWORD", "ACCOUNT_1_CHANNELS", "ACCOUNT_1_LABEL",
+			"ACCOUNT_2_PASSWORD", "ACCOUNT_2_CHANNELS",
+		} {
+			os.Unsetenv(k)
+		}
+	}()
+
+	cfg, err := LoadConfig()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(cfg.Accounts) != 2 {
+		t.Fatalf("want 2 accounts, got %d", len(cfg.Accounts))
+	}
+	a := cfg.Accounts[0]
+	if a.Password != "pw-a" || a.Label != "供货商A" {
+		t.Errorf("account 0: got password=%q label=%q", a.Password, a.Label)
+	}
+	if len(a.Channels) != 2 {
+		t.Fatalf("account 0: want 2 channels, got %d", len(a.Channels))
+	}
+	if a.Channels[0].InstIdx != 0 || a.Channels[0].ChannelID != 42 {
+		t.Errorf("account 0 channel 0: got %+v", a.Channels[0])
+	}
+	if a.Channels[1].InstIdx != 0 || a.Channels[1].ChannelID != 88 {
+		t.Errorf("account 0 channel 1: got %+v", a.Channels[1])
+	}
+	b := cfg.Accounts[1]
+	if b.Label != "" {
+		t.Errorf("account 1: want empty label, got %q", b.Label)
+	}
+	if len(b.Channels) != 1 || b.Channels[0].InstIdx != 1 || b.Channels[0].ChannelID != 15 {
+		t.Errorf("account 1 channels: got %+v", b.Channels)
+	}
+}
+
+func TestLoadConfig_Accounts_empty(t *testing.T) {
+	os.Setenv("NEWAPI_BASE_URL", "https://example.com")
+	os.Setenv("NEWAPI_ACCESS_TOKEN", "tok")
+	os.Setenv("CHANNEL_ID", "1")
+	os.Unsetenv("ACCOUNT_1_PASSWORD")
+	defer func() {
+		os.Unsetenv("NEWAPI_BASE_URL")
+		os.Unsetenv("NEWAPI_ACCESS_TOKEN")
+		os.Unsetenv("CHANNEL_ID")
+	}()
+
+	cfg, err := LoadConfig()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(cfg.Accounts) != 0 {
+		t.Errorf("want 0 accounts when none configured, got %d", len(cfg.Accounts))
+	}
+}
+
+func TestLoadConfig_Accounts_invalidChannels(t *testing.T) {
+	os.Setenv("NEWAPI_BASE_URL", "https://example.com")
+	os.Setenv("NEWAPI_ACCESS_TOKEN", "tok")
+	os.Setenv("CHANNEL_ID", "1")
+	os.Setenv("ACCOUNT_1_PASSWORD", "pw")
+	os.Setenv("ACCOUNT_1_CHANNELS", "bad-format")
+	defer func() {
+		os.Unsetenv("NEWAPI_BASE_URL")
+		os.Unsetenv("NEWAPI_ACCESS_TOKEN")
+		os.Unsetenv("CHANNEL_ID")
+		os.Unsetenv("ACCOUNT_1_PASSWORD")
+		os.Unsetenv("ACCOUNT_1_CHANNELS")
+	}()
+
+	_, err := LoadConfig()
+	if err == nil {
+		t.Error("want error for invalid ACCOUNT_1_CHANNELS format")
+	}
+}

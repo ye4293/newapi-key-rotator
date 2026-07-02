@@ -17,8 +17,22 @@ type InstanceConfig struct {
 	Insecure    bool
 }
 
+// ChannelRef 引用一个监控单元：哪个 InstanceConfig（0-based 索引）+ 哪个渠道 ID。
+type ChannelRef struct {
+	InstIdx   int
+	ChannelID int
+}
+
+// AccountConfig 是供货商账户，拥有渠道级访问权限（查看状态 + 提交 Key）。
+type AccountConfig struct {
+	Password string
+	Label    string
+	Channels []ChannelRef
+}
+
 type Config struct {
 	Instances    []*InstanceConfig
+	Accounts     []*AccountConfig // 供货商账户；空则仅管理员可登录
 	DataDir      string
 	PollInterval time.Duration
 	HTTPTimeout  time.Duration
@@ -75,6 +89,36 @@ func LoadConfig() (*Config, error) {
 			return nil, fmt.Errorf("instance %d: %w", n, err)
 		}
 		c.Instances = append(c.Instances, inst)
+	}
+
+	for n := 1; ; n++ {
+		p := fmt.Sprintf("ACCOUNT_%d_", n)
+		pw := strings.TrimSpace(os.Getenv(p + "PASSWORD"))
+		if pw == "" {
+			break
+		}
+		acc := &AccountConfig{
+			Password: pw,
+			Label:    strings.TrimSpace(os.Getenv(p + "LABEL")),
+		}
+		rawChs := strings.TrimSpace(os.Getenv(p + "CHANNELS"))
+		for _, part := range strings.Split(rawChs, ",") {
+			part = strings.TrimSpace(part)
+			if part == "" {
+				continue
+			}
+			sub := strings.SplitN(part, ":", 2)
+			if len(sub) != 2 {
+				return nil, fmt.Errorf("ACCOUNT_%d_CHANNELS: invalid entry %q (want instIdx:channelID)", n, part)
+			}
+			instIdx, err1 := strconv.Atoi(strings.TrimSpace(sub[0]))
+			chID, err2 := strconv.Atoi(strings.TrimSpace(sub[1]))
+			if err1 != nil || err2 != nil || instIdx < 0 || chID <= 0 {
+				return nil, fmt.Errorf("ACCOUNT_%d_CHANNELS: invalid entry %q", n, part)
+			}
+			acc.Channels = append(acc.Channels, ChannelRef{InstIdx: instIdx, ChannelID: chID})
+		}
+		c.Accounts = append(c.Accounts, acc)
 	}
 
 	return c, nil
