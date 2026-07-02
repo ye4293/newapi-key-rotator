@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"crypto/subtle"
 	_ "embed"
 	"encoding/base64"
 	"encoding/json"
@@ -63,24 +62,6 @@ func (s *Server) getInstance(r *http.Request) (*instance, bool) {
 		return nil, false
 	}
 	return s.instances[idx], true
-}
-
-func (s *Server) withAuth(next http.Handler) http.Handler {
-	if s.cfg.WebPassword == "" {
-		log.Printf("WARN WEB_PASSWORD is not set — the web console is UNPROTECTED; set it before exposing this service")
-		return next
-	}
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		user, pass, ok := r.BasicAuth()
-		userOK := subtle.ConstantTimeCompare([]byte(user), []byte(s.cfg.WebUsername)) == 1
-		passOK := subtle.ConstantTimeCompare([]byte(pass), []byte(s.cfg.WebPassword)) == 1
-		if !ok || !userOK || !passOK {
-			w.Header().Set("WWW-Authenticate", `Basic realm="newapi-key-rotator"`)
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
 }
 
 func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {

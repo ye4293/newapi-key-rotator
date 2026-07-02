@@ -14,10 +14,12 @@ import (
 )
 
 type instance struct {
-	cfg     *InstanceConfig
-	store   *Store
-	rotator *Rotator
-	trigger chan struct{}
+	cfg       *InstanceConfig
+	store     *Store
+	rotator   *Rotator
+	trigger   chan struct{}
+	instIdx   int // InstanceConfig 在 Config.Instances 中的下标（Task 1 垫片）
+	channelID int // 当前生效的渠道 ID（Task 1 垫片）
 }
 
 func main() {
