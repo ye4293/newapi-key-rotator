@@ -9,6 +9,7 @@ import (
 )
 
 type Rotator struct {
+	label   string // 日志标识，如 "ezlinkai/ch-42"
 	instCfg  *InstanceConfig
 	cfg      *Config
 	client   *Client
@@ -26,8 +27,9 @@ type Rotator struct {
 	channelBalance   float64
 }
 
-func NewRotator(instCfg *InstanceConfig, cfg *Config, client *Client, store *Store) *Rotator {
+func NewRotator(label string, instCfg *InstanceConfig, cfg *Config, client *Client, store *Store) *Rotator {
 	return &Rotator{
+		label:   label,
 		instCfg: instCfg,
 		cfg:     cfg,
 		client:  client,
@@ -73,11 +75,11 @@ func (r *Rotator) tick(ctx context.Context) {
 	if paused {
 		return
 	}
-	chID := r.store.ChannelID(r.instCfg.ChannelID)
+	chID := r.store.ChannelID(r.instCfg.ChannelIDs[0])
 	status, channel, err := r.client.GetChannel(ctx, chID)
 	if err != nil {
 		r.recordError("get channel: " + err.Error())
-		log.Printf("ERROR check channel #%d: %v", chID, err)
+		log.Printf("ERROR [%s] check: %v", r.label, err)
 		return
 	}
 	r.recordStatus(status, channel)
@@ -87,7 +89,7 @@ func (r *Rotator) tick(ctx context.Context) {
 		if r.pendingRotation {
 			r.pendingRotation = false
 			r.mu.Unlock()
-			log.Printf("INFO channel #%d recovered after re-enable — key is still valid, no rotation", chID)
+			log.Printf("INFO [%s] recovered after re-enable — key is still valid, no rotation", r.label)
 		} else {
 			r.mu.Unlock()
 		}
@@ -103,14 +105,14 @@ func (r *Rotator) tick(ctx context.Context) {
 		// First time seeing auto-disable: re-enable with the same key before rotating.
 		if err := r.client.ReEnableChannel(ctx, channel); err != nil {
 			r.recordError("re-enable: " + err.Error())
-			log.Printf("ERROR channel #%d re-enable with same key: %v", chID, err)
+			log.Printf("ERROR [%s] re-enable with same key: %v", r.label, err)
 			return
 		}
 		r.mu.Lock()
 		r.pendingRotation = true
 		r.mu.Unlock()
 		r.recordAction("auto-disabled → re-enabled same key (will rotate if disabled again)")
-		log.Printf("INFO channel #%d auto-disabled → re-enabled same key, watching next cycle", chID)
+		log.Printf("INFO [%s] auto-disabled → re-enabled same key, watching next cycle", r.label)
 		return
 	}
 
@@ -127,18 +129,18 @@ func (r *Rotator) tick(ctx context.Context) {
 		r.warnedEmpty = true
 		r.mu.Unlock()
 		if !warned {
-			log.Printf("WARN channel #%d auto-disabled but key pool is empty/exhausted; not rotating", chID)
+			log.Printf("WARN [%s] auto-disabled but key pool is empty/exhausted; not rotating", r.label)
 		}
 		return
 	}
 
 	if err := r.client.ApplyKeyAndEnable(ctx, channel, next); err != nil {
 		r.recordError("apply key: " + err.Error())
-		log.Printf("ERROR channel #%d apply key #%d: %v", chID, idx+1, err)
+		log.Printf("ERROR [%s] apply key #%d: %v", r.label, idx+1, err)
 		return
 	}
 	if err := r.store.CommitAdvance(); err != nil {
-		log.Printf("ERROR persist progress after applying key #%d: %v", idx+1, err)
+		log.Printf("ERROR [%s] persist progress after applying key #%d: %v", r.label, idx+1, err)
 	}
 
 	total := r.store.Snapshot().Total
@@ -146,7 +148,7 @@ func (r *Rotator) tick(ctx context.Context) {
 	r.mu.Lock()
 	r.warnedEmpty = false
 	r.mu.Unlock()
-	log.Printf("INFO channel #%d auto-disabled again → applied key %d/%d (%s) and re-enabled", chID, idx+1, total, maskKey(next))
+	log.Printf("INFO [%s] auto-disabled again → applied key %d/%d (%s) and re-enabled", r.label, idx+1, total, maskKey(next))
 }
 
 type Status struct {
@@ -171,11 +173,11 @@ func (r *Rotator) Status() Status {
 	if !r.lastChecked.IsZero() {
 		checked = r.lastChecked.Format(time.RFC3339)
 	}
-	effective := r.store.ChannelID(r.instCfg.ChannelID)
+	effective := r.store.ChannelID(r.instCfg.ChannelIDs[0])
 	return Status{
 		ChannelID:        effective,
-		DefaultChannelID: r.instCfg.ChannelID,
-		IsCustomChannel:  effective != r.instCfg.ChannelID,
+		DefaultChannelID: r.instCfg.ChannelIDs[0],
+		IsCustomChannel:  effective != r.instCfg.ChannelIDs[0],
 		Paused:           r.paused,
 		LastStatus:       r.lastStatus,
 		PendingRotation:  r.pendingRotation,

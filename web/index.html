@@ -69,7 +69,7 @@
 <div class="wrap">
   <h1>new-api Key 轮换控制台</h1>
   <div class="tabs" id="tab-bar"></div>
-  <div class="label-row">
+  <div class="label-row" id="label-row">
     <input type="text" id="label-input" placeholder="为当前实例添加备注名…" maxlength="40" />
     <button id="btn-label-save" class="secondary">保存备注</button>
   </div>
@@ -119,6 +119,7 @@
 </div>
 
 <script>
+let isAdmin = true;
 let instances = [];
 let activeIdx = 0;
 const _authHdr = {'Authorization': 'Basic __AUTH_TOKEN__'};
@@ -171,7 +172,10 @@ function renderTabs() {
     const btn = document.createElement('button');
     const isActive = inst.index === activeIdx;
     btn.className = 'tab-btn' + (isActive ? ' active' : '');
-    btn.textContent = inst.label ? `${inst.label} · #${inst.channel_id}` : `实例${inst.index} · #${inst.channel_id}`;
+    const platformTag = inst.platform ? `[${inst.platform}] ` : '';
+    btn.textContent = inst.label
+      ? `${platformTag}${inst.label} · #${inst.channel_id}`
+      : `${platformTag}实例${inst.index} · #${inst.channel_id}`;
     btn.onclick = () => {
       activeIdx = inst.index;
       document.getElementById('label-input').value = inst.label || '';
@@ -329,6 +333,20 @@ document.getElementById('ch-reset-link').addEventListener('click', async () => {
 });
 
 (async () => {
+  try {
+    const r = await apiFetch('api/me', { headers: { 'Accept': 'application/json' } });
+    const me = await r.json();
+    isAdmin = me.is_admin;
+  } catch(e) {}
+
+  if (!isAdmin) {
+    document.getElementById('btn-rotate').style.display = 'none';
+    document.getElementById('btn-pause').style.display = 'none';
+    document.getElementById('btn-delete').style.display = 'none';
+    document.getElementById('label-row').style.display = 'none';
+    document.getElementById('ch-edit-link').style.display = 'none';
+  }
+
   await reloadInstances();
   setInterval(() => refresh(), 5000);
 })();

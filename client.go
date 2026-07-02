@@ -56,7 +56,9 @@ func (c *Client) do(ctx context.Context, method, path string, body []byte) (*api
 		return nil, err
 	}
 	req.Header.Set("Authorization", c.token)
-	req.Header.Set("New-Api-User", c.userID)
+	if c.userID != "" {
+		req.Header.Set("New-Api-User", c.userID)
+	}
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}

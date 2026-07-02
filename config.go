@@ -12,12 +12,27 @@ type InstanceConfig struct {
 	BaseURL     string
 	AccessToken string
 	UserID      string
-	ChannelID   int
+	ChannelIDs  []int
+	Platform    string
 	Insecure    bool
+}
+
+// ChannelRef 引用一个监控单元：哪个 InstanceConfig（0-based 索引）+ 哪个渠道 ID。
+type ChannelRef struct {
+	InstIdx   int
+	ChannelID int
+}
+
+// AccountConfig 是供货商账户，拥有渠道级访问权限（查看状态 + 提交 Key）。
+type AccountConfig struct {
+	Password string
+	Label    string
+	Channels []ChannelRef
 }
 
 type Config struct {
 	Instances    []*InstanceConfig
+	Accounts     []*AccountConfig // 供货商账户；空则仅管理员可登录
 	DataDir      string
 	PollInterval time.Duration
 	HTTPTimeout  time.Duration
@@ -52,7 +67,10 @@ func LoadConfig() (*Config, error) {
 		return nil, err
 	}
 
-	inst0, err := loadInstanceFromEnv("NEWAPI_BASE_URL", "NEWAPI_ACCESS_TOKEN", "NEWAPI_USER_ID", "CHANNEL_ID", "INSECURE_SKIP_VERIFY")
+	inst0, err := loadInstanceFromEnv(
+		"NEWAPI_BASE_URL", "NEWAPI_ACCESS_TOKEN", "NEWAPI_USER_ID",
+		"CHANNEL_ID", "CHANNEL_IDS", "NEWAPI_PLATFORM", "INSECURE_SKIP_VERIFY",
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -63,21 +81,64 @@ func LoadConfig() (*Config, error) {
 		if strings.TrimSpace(os.Getenv(p+"BASE_URL")) == "" {
 			break
 		}
-		inst, err := loadInstanceFromEnv(p+"BASE_URL", p+"ACCESS_TOKEN", p+"USER_ID", p+"CHANNEL_ID", p+"INSECURE_SKIP_VERIFY")
+		inst, err := loadInstanceFromEnv(
+			p+"BASE_URL", p+"ACCESS_TOKEN", p+"USER_ID",
+			p+"CHANNEL_ID", p+"CHANNEL_IDS", p+"PLATFORM", p+"INSECURE_SKIP_VERIFY",
+		)
 		if err != nil {
 			return nil, fmt.Errorf("instance %d: %w", n, err)
 		}
 		c.Instances = append(c.Instances, inst)
 	}
 
+	for n := 1; ; n++ {
+		p := fmt.Sprintf("ACCOUNT_%d_", n)
+		pw := strings.TrimSpace(os.Getenv(p + "PASSWORD"))
+		if pw == "" {
+			break
+		}
+		acc := &AccountConfig{
+			Password: pw,
+			Label:    strings.TrimSpace(os.Getenv(p + "LABEL")),
+		}
+		rawChs := strings.TrimSpace(os.Getenv(p + "CHANNELS"))
+		for _, part := range strings.Split(rawChs, ",") {
+			part = strings.TrimSpace(part)
+			if part == "" {
+				continue
+			}
+			sub := strings.SplitN(part, ":", 2)
+			if len(sub) != 2 {
+				return nil, fmt.Errorf("ACCOUNT_%d_CHANNELS: invalid entry %q (want instIdx:channelID)", n, part)
+			}
+			instIdx, err1 := strconv.Atoi(strings.TrimSpace(sub[0]))
+			chID, err2 := strconv.Atoi(strings.TrimSpace(sub[1]))
+			if err1 != nil || err2 != nil || instIdx < 0 || chID <= 0 {
+				return nil, fmt.Errorf("ACCOUNT_%d_CHANNELS: invalid entry %q", n, part)
+			}
+			acc.Channels = append(acc.Channels, ChannelRef{InstIdx: instIdx, ChannelID: chID})
+		}
+		c.Accounts = append(c.Accounts, acc)
+	}
+
+	// 校验供货商账户引用的 instIdx 在有效范围内
+	for n, acc := range c.Accounts {
+		for _, ref := range acc.Channels {
+			if ref.InstIdx >= len(c.Instances) {
+				return nil, fmt.Errorf("ACCOUNT_%d_CHANNELS: instIdx %d is out of range (only %d instance(s) configured)", n+1, ref.InstIdx, len(c.Instances))
+			}
+		}
+	}
+
 	return c, nil
 }
 
-func loadInstanceFromEnv(baseURLKey, tokenKey, userIDKey, channelKey, insecureKey string) (*InstanceConfig, error) {
+func loadInstanceFromEnv(baseURLKey, tokenKey, userIDKey, channelKey, channelIDsKey, platformKey, insecureKey string) (*InstanceConfig, error) {
 	inst := &InstanceConfig{
 		BaseURL:     strings.TrimRight(strings.TrimSpace(os.Getenv(baseURLKey)), "/"),
 		AccessToken: strings.TrimSpace(os.Getenv(tokenKey)),
 		UserID:      strings.TrimSpace(os.Getenv(userIDKey)),
+		Platform:    strings.TrimSpace(os.Getenv(platformKey)),
 		Insecure:    strings.EqualFold(strings.TrimSpace(os.Getenv(insecureKey)), "true"),
 	}
 
@@ -88,22 +149,50 @@ func loadInstanceFromEnv(baseURLKey, tokenKey, userIDKey, channelKey, insecureKe
 	if inst.AccessToken == "" {
 		missing = append(missing, tokenKey)
 	}
-	if inst.UserID == "" {
-		missing = append(missing, userIDKey)
-	}
+	// UserID 为可选字段，不再加入 missing 列表
+
+	// 优先使用 CHANNEL_IDS（逗号分隔多个渠道 ID），回退到 CHANNEL_ID（单个，向后兼容）
+	channelIDsRaw := strings.TrimSpace(os.Getenv(channelIDsKey))
 	channelRaw := strings.TrimSpace(os.Getenv(channelKey))
-	if channelRaw == "" {
+
+	if channelIDsRaw != "" {
+		// 解析逗号分隔的多个渠道 ID
+		parts := strings.Split(channelIDsRaw, ",")
+		seen := make(map[int]bool)
+		for _, part := range parts {
+			part = strings.TrimSpace(part)
+			if part == "" {
+				continue
+			}
+			id, err := strconv.Atoi(part)
+			if err != nil || id <= 0 {
+				return nil, fmt.Errorf("%s contains invalid channel ID %q: must be a positive integer", channelIDsKey, part)
+			}
+			if seen[id] {
+				continue
+			}
+			seen[id] = true
+			inst.ChannelIDs = append(inst.ChannelIDs, id)
+		}
+		if len(inst.ChannelIDs) == 0 {
+			return nil, fmt.Errorf("%s is set but contains no valid channel IDs", channelIDsKey)
+		}
+	} else if channelRaw != "" {
+		// 向后兼容：单个渠道 ID
+		id, err := strconv.Atoi(channelRaw)
+		if err != nil || id <= 0 {
+			return nil, fmt.Errorf("%s must be a positive integer, got %q", channelKey, channelRaw)
+		}
+		inst.ChannelIDs = []int{id}
+	} else {
+		// 两者均未配置
 		missing = append(missing, channelKey)
 	}
+
 	if len(missing) > 0 {
 		return nil, fmt.Errorf("missing required env vars: %s", strings.Join(missing, ", "))
 	}
 
-	id, err := strconv.Atoi(channelRaw)
-	if err != nil || id <= 0 {
-		return nil, fmt.Errorf("%s must be a positive integer, got %q", channelKey, channelRaw)
-	}
-	inst.ChannelID = id
 	return inst, nil
 }
 
