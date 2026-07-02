@@ -44,7 +44,8 @@ func main() {
 		}
 		client := NewClient(instCfg, cfg)
 		trigger := make(chan struct{}, 1)
-		rotator := NewRotator(instCfg, cfg, client, store)
+		tmpLabel := fmt.Sprintf("ch-%d", instCfg.ChannelIDs[0])
+		rotator := NewRotator(tmpLabel, instCfg, cfg, client, store)
 		instances = append(instances, &instance{cfg: instCfg, store: store, rotator: rotator, trigger: trigger})
 	}
 
