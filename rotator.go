@@ -73,7 +73,7 @@ func (r *Rotator) tick(ctx context.Context) {
 	if paused {
 		return
 	}
-	chID := r.store.ChannelID(r.instCfg.ChannelID)
+	chID := r.store.ChannelID(r.instCfg.ChannelIDs[0])
 	status, channel, err := r.client.GetChannel(ctx, chID)
 	if err != nil {
 		r.recordError("get channel: " + err.Error())
@@ -171,11 +171,11 @@ func (r *Rotator) Status() Status {
 	if !r.lastChecked.IsZero() {
 		checked = r.lastChecked.Format(time.RFC3339)
 	}
-	effective := r.store.ChannelID(r.instCfg.ChannelID)
+	effective := r.store.ChannelID(r.instCfg.ChannelIDs[0])
 	return Status{
 		ChannelID:        effective,
-		DefaultChannelID: r.instCfg.ChannelID,
-		IsCustomChannel:  effective != r.instCfg.ChannelID,
+		DefaultChannelID: r.instCfg.ChannelIDs[0],
+		IsCustomChannel:  effective != r.instCfg.ChannelIDs[0],
 		Paused:           r.paused,
 		LastStatus:       r.lastStatus,
 		PendingRotation:  r.pendingRotation,

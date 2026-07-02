@@ -117,7 +117,7 @@ func (s *Server) handleInstances(w http.ResponseWriter, r *http.Request) {
 		infos = append(infos, instanceInfo{
 			Index:     i,
 			BaseURL:   inst.cfg.BaseURL,
-			ChannelID: inst.cfg.ChannelID,
+			ChannelID: inst.cfg.ChannelIDs[0],
 			Label:     inst.store.GetLabel(),
 		})
 	}
@@ -193,7 +193,7 @@ func (s *Server) handleInstanceDelete(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"success": false, "message": err.Error()})
 		return
 	}
-	log.Printf("INFO channel #%d marked as deleted (will be skipped on next restart)", inst.cfg.ChannelID)
+	log.Printf("INFO channel #%d marked as deleted (will be skipped on next restart)", inst.cfg.ChannelIDs[0])
 	writeJSON(w, http.StatusOK, map[string]any{"success": true, "message": "实例已标记删除，重启后生效"})
 }
 
@@ -208,7 +208,7 @@ func (s *Server) handleInstancePause(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	inst.rotator.Pause()
-	log.Printf("INFO channel #%d monitoring paused", inst.cfg.ChannelID)
+	log.Printf("INFO channel #%d monitoring paused", inst.cfg.ChannelIDs[0])
 	writeJSON(w, http.StatusOK, map[string]any{"success": true, "paused": true})
 }
 
@@ -224,7 +224,7 @@ func (s *Server) handleInstanceResume(w http.ResponseWriter, r *http.Request) {
 	}
 	inst.rotator.Resume()
 	fireInstance(inst.trigger)
-	log.Printf("INFO channel #%d monitoring resumed", inst.cfg.ChannelID)
+	log.Printf("INFO channel #%d monitoring resumed", inst.cfg.ChannelIDs[0])
 	writeJSON(w, http.StatusOK, map[string]any{"success": true, "paused": false})
 }
 
@@ -236,11 +236,11 @@ func (s *Server) handleInstanceChannelID(w http.ResponseWriter, r *http.Request)
 	}
 	switch r.Method {
 	case http.MethodGet:
-		effective := inst.store.ChannelID(inst.cfg.ChannelID)
+		effective := inst.store.ChannelID(inst.cfg.ChannelIDs[0])
 		writeJSON(w, http.StatusOK, map[string]any{
 			"channel_id":         effective,
-			"default_channel_id": inst.cfg.ChannelID,
-			"is_custom":          effective != inst.cfg.ChannelID,
+			"default_channel_id": inst.cfg.ChannelIDs[0],
+			"is_custom":          effective != inst.cfg.ChannelIDs[0],
 		})
 	case http.MethodPost:
 		var body struct {
@@ -258,9 +258,9 @@ func (s *Server) handleInstanceChannelID(w http.ResponseWriter, r *http.Request)
 			writeJSON(w, http.StatusInternalServerError, map[string]any{"success": false, "message": err.Error()})
 			return
 		}
-		log.Printf("INFO channel override set to %d for instance (default %d)", body.ChannelID, inst.cfg.ChannelID)
+		log.Printf("INFO channel override set to %d for instance (default %d)", body.ChannelID, inst.cfg.ChannelIDs[0])
 		fireInstance(inst.trigger)
-		writeJSON(w, http.StatusOK, map[string]any{"success": true, "channel_id": inst.store.ChannelID(inst.cfg.ChannelID)})
+		writeJSON(w, http.StatusOK, map[string]any{"success": true, "channel_id": inst.store.ChannelID(inst.cfg.ChannelIDs[0])})
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
@@ -297,7 +297,7 @@ func (s *Server) keysHandler(w http.ResponseWriter, r *http.Request, inst *insta
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"success": false, "message": err.Error()})
 		return
 	}
-	log.Printf("INFO channel #%d key pool replaced: %d key(s), progress reset", inst.cfg.ChannelID, count)
+	log.Printf("INFO channel #%d key pool replaced: %d key(s), progress reset", inst.cfg.ChannelIDs[0], count)
 	fireInstance(inst.trigger)
 	writeJSON(w, http.StatusOK, map[string]any{"success": true, "count": count})
 }
@@ -319,7 +319,7 @@ func (s *Server) keysAppendHandler(w http.ResponseWriter, r *http.Request, inst 
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"success": false, "message": err.Error()})
 		return
 	}
-	log.Printf("INFO channel #%d key pool appended: %d new key(s) added", inst.cfg.ChannelID, added)
+	log.Printf("INFO channel #%d key pool appended: %d new key(s) added", inst.cfg.ChannelIDs[0], added)
 	if added > 0 {
 		fireInstance(inst.trigger)
 	}

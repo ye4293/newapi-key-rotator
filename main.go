@@ -39,7 +39,7 @@ func main() {
 			log.Fatalf("store error (instance %d): %v", i, err)
 		}
 		if store.IsDeleted() {
-			log.Printf("INFO instance %d (channel #%d) is deleted — skipping", i, instCfg.ChannelID)
+			log.Printf("INFO instance %d (channel #%d) is deleted — skipping", i, instCfg.ChannelIDs[0])
 			continue
 		}
 		client := NewClient(instCfg, cfg)
