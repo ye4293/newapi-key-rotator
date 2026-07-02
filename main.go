@@ -14,12 +14,12 @@ import (
 )
 
 type instance struct {
+	instIdx   int // 对应 cfg.Instances 的下标（0-based）
+	channelID int // 该 instance 监控的渠道 ID
 	cfg       *InstanceConfig
 	store     *Store
 	rotator   *Rotator
 	trigger   chan struct{}
-	instIdx   int // InstanceConfig 在 Config.Instances 中的下标（Task 1 垫片）
-	channelID int // 当前生效的渠道 ID（Task 1 垫片）
 }
 
 func main() {
@@ -30,25 +30,39 @@ func main() {
 		log.Fatalf("config error: %v", err)
 	}
 
-	instances := make([]*instance, 0, len(cfg.Instances))
+	instances := make([]*instance, 0)
 	for i, instCfg := range cfg.Instances {
-		poolFile := fmt.Sprintf("pool_%d.json", i)
-		if i == 0 {
-			poolFile = "pool.json"
+		platformLabel := instCfg.Platform
+		if platformLabel == "" {
+			platformLabel = fmt.Sprintf("inst-%d", i)
 		}
-		store, err := NewStore(filepath.Join(cfg.DataDir, poolFile))
-		if err != nil {
-			log.Fatalf("store error (instance %d): %v", i, err)
+		for _, chID := range instCfg.ChannelIDs {
+			label := fmt.Sprintf("%s/ch-%d", platformLabel, chID)
+			poolFile := fmt.Sprintf("pool-%d-%d.json", i, chID)
+			store, err := NewStore(filepath.Join(cfg.DataDir, poolFile))
+			if err != nil {
+				log.Fatalf("store error (%s): %v", label, err)
+			}
+			if store.IsDeleted() {
+				log.Printf("INFO [%s] is deleted — skipping", label)
+				continue
+			}
+			client := NewClient(instCfg, cfg)
+			trigger := make(chan struct{}, 1)
+			rotator := NewRotator(label, instCfg, cfg, client, store)
+			instances = append(instances, &instance{
+				instIdx:   i,
+				channelID: chID,
+				cfg:       instCfg,
+				store:     store,
+				rotator:   rotator,
+				trigger:   trigger,
+			})
 		}
-		if store.IsDeleted() {
-			log.Printf("INFO instance %d (channel #%d) is deleted — skipping", i, instCfg.ChannelIDs[0])
-			continue
-		}
-		client := NewClient(instCfg, cfg)
-		trigger := make(chan struct{}, 1)
-		tmpLabel := fmt.Sprintf("ch-%d", instCfg.ChannelIDs[0])
-		rotator := NewRotator(tmpLabel, instCfg, cfg, client, store)
-		instances = append(instances, &instance{cfg: instCfg, store: store, rotator: rotator, trigger: trigger})
+	}
+
+	if len(instances) == 0 {
+		log.Fatalf("no active monitoring instances — check your channel configuration")
 	}
 
 	server := NewServer(cfg, instances)
