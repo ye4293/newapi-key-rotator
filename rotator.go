@@ -104,14 +104,14 @@ func (r *Rotator) tick(ctx context.Context) {
 	r.mu.Unlock()
 
 	if !pending {
-		// 池已耗尽时跳过重启——重启后还是会被禁用，徒增 API 调用
-		if r.store.Snapshot().Exhausted {
+		// 池无可用 key（空池或已耗尽）时跳过重启，重启了也会立刻再被禁用
+		if _, _, hasNext := r.store.PeekNext(); !hasNext {
 			r.mu.Lock()
 			warned := r.warnedEmpty
 			r.warnedEmpty = true
 			r.mu.Unlock()
 			if !warned {
-				log.Printf("WARN [%s] auto-disabled and key pool exhausted; waiting for new keys", r.label)
+				log.Printf("WARN [%s] auto-disabled and key pool is empty; waiting for new keys", r.label)
 			}
 			return
 		}
