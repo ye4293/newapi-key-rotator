@@ -35,6 +35,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/instance/{idx}/resume", s.handleInstanceResume)
 	mux.HandleFunc("/api/instance/{idx}/delete", s.handleInstanceDelete)
 	mux.HandleFunc("/api/instance/{idx}/label", s.handleInstanceLabel)
+	mux.HandleFunc("/api/me", s.handleMe)
 	// Legacy routes — delegate to instance 0 for backward compatibility.
 	mux.HandleFunc("/api/status", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, s.instances[0].rotator.Status())
@@ -70,36 +71,39 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	// Inject Basic Auth token so JS fetch calls can authenticate without relying
-	// on the browser's automatic credential forwarding (which varies by browser).
-	token := base64.StdEncoding.EncodeToString(
-		[]byte(s.cfg.WebUsername + ":" + s.cfg.WebPassword),
-	)
-	page := bytes.Replace(indexHTML,
-		[]byte("__AUTH_TOKEN__"),
-		[]byte(token),
-		1,
-	)
+	user, pass, _ := r.BasicAuth()
+	token := base64.StdEncoding.EncodeToString([]byte(user + ":" + pass))
+	page := bytes.Replace(indexHTML, []byte("__AUTH_TOKEN__"), []byte(token), 1)
 	_, _ = w.Write(page)
 }
 
 func (s *Server) handleInstances(w http.ResponseWriter, r *http.Request) {
+	acc := getAccount(r)
 	type instanceInfo struct {
 		Index     int    `json:"index"`
 		BaseURL   string `json:"base_url"`
 		ChannelID int    `json:"channel_id"`
+		InstIdx   int    `json:"inst_idx"`
+		Platform  string `json:"platform"`
 		Label     string `json:"label"`
+		IsAdmin   bool   `json:"is_admin"`
 	}
 	infos := make([]instanceInfo, 0, len(s.instances))
 	for i, inst := range s.instances {
 		if inst.store.IsDeleted() {
 			continue
 		}
+		if !s.canAccess(acc, inst) {
+			continue
+		}
 		infos = append(infos, instanceInfo{
 			Index:     i,
 			BaseURL:   inst.cfg.BaseURL,
-			ChannelID: inst.cfg.ChannelIDs[0],
+			ChannelID: inst.channelID,
+			InstIdx:   inst.instIdx,
+			Platform:  inst.cfg.Platform,
 			Label:     inst.store.GetLabel(),
+			IsAdmin:   acc.IsAdmin,
 		})
 	}
 	writeJSON(w, http.StatusOK, infos)
@@ -111,6 +115,9 @@ func (s *Server) handleInstanceStatus(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	if !s.requireChannelAccess(w, r, inst) {
+		return
+	}
 	writeJSON(w, http.StatusOK, inst.rotator.Status())
 }
 
@@ -120,6 +127,9 @@ func (s *Server) handleInstanceKeys(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	if !s.requireChannelAccess(w, r, inst) {
+		return
+	}
 	s.keysHandler(w, r, inst)
 }
 
@@ -127,6 +137,9 @@ func (s *Server) handleInstanceKeysAppend(w http.ResponseWriter, r *http.Request
 	inst, ok := s.getInstance(r)
 	if !ok {
 		http.NotFound(w, r)
+		return
+	}
+	if !s.requireChannelAccess(w, r, inst) {
 		return
 	}
 	s.keysAppendHandler(w, r, inst)
@@ -140,8 +153,14 @@ func (s *Server) handleInstanceLabel(w http.ResponseWriter, r *http.Request) {
 	}
 	switch r.Method {
 	case http.MethodGet:
+		if !s.requireChannelAccess(w, r, inst) {
+			return
+		}
 		writeJSON(w, http.StatusOK, map[string]any{"label": inst.store.GetLabel()})
 	case http.MethodPost:
+		if !s.requireAdmin(w, r) {
+			return
+		}
 		var body struct {
 			Label string `json:"label"`
 		}
@@ -165,6 +184,9 @@ func (s *Server) handleInstanceDelete(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	if !s.requireAdmin(w, r) {
+		return
+	}
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -174,7 +196,7 @@ func (s *Server) handleInstanceDelete(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"success": false, "message": err.Error()})
 		return
 	}
-	log.Printf("INFO channel #%d marked as deleted (will be skipped on next restart)", inst.cfg.ChannelIDs[0])
+	log.Printf("INFO channel #%d marked as deleted (will be skipped on next restart)", inst.channelID)
 	writeJSON(w, http.StatusOK, map[string]any{"success": true, "message": "实例已标记删除，重启后生效"})
 }
 
@@ -184,12 +206,15 @@ func (s *Server) handleInstancePause(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	if !s.requireAdmin(w, r) {
+		return
+	}
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 	inst.rotator.Pause()
-	log.Printf("INFO channel #%d monitoring paused", inst.cfg.ChannelIDs[0])
+	log.Printf("INFO channel #%d monitoring paused", inst.channelID)
 	writeJSON(w, http.StatusOK, map[string]any{"success": true, "paused": true})
 }
 
@@ -199,13 +224,16 @@ func (s *Server) handleInstanceResume(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	if !s.requireAdmin(w, r) {
+		return
+	}
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 	inst.rotator.Resume()
 	fireInstance(inst.trigger)
-	log.Printf("INFO channel #%d monitoring resumed", inst.cfg.ChannelIDs[0])
+	log.Printf("INFO channel #%d monitoring resumed", inst.channelID)
 	writeJSON(w, http.StatusOK, map[string]any{"success": true, "paused": false})
 }
 
@@ -217,13 +245,19 @@ func (s *Server) handleInstanceChannelID(w http.ResponseWriter, r *http.Request)
 	}
 	switch r.Method {
 	case http.MethodGet:
-		effective := inst.store.ChannelID(inst.cfg.ChannelIDs[0])
+		if !s.requireChannelAccess(w, r, inst) {
+			return
+		}
+		effective := inst.store.ChannelID(inst.channelID)
 		writeJSON(w, http.StatusOK, map[string]any{
 			"channel_id":         effective,
-			"default_channel_id": inst.cfg.ChannelIDs[0],
-			"is_custom":          effective != inst.cfg.ChannelIDs[0],
+			"default_channel_id": inst.channelID,
+			"is_custom":          effective != inst.channelID,
 		})
 	case http.MethodPost:
+		if !s.requireAdmin(w, r) {
+			return
+		}
 		var body struct {
 			ChannelID int `json:"channel_id"`
 		}
@@ -239,9 +273,9 @@ func (s *Server) handleInstanceChannelID(w http.ResponseWriter, r *http.Request)
 			writeJSON(w, http.StatusInternalServerError, map[string]any{"success": false, "message": err.Error()})
 			return
 		}
-		log.Printf("INFO channel override set to %d for instance (default %d)", body.ChannelID, inst.cfg.ChannelIDs[0])
+		log.Printf("INFO channel override set to %d for instance (default %d)", body.ChannelID, inst.channelID)
 		fireInstance(inst.trigger)
-		writeJSON(w, http.StatusOK, map[string]any{"success": true, "channel_id": inst.store.ChannelID(inst.cfg.ChannelIDs[0])})
+		writeJSON(w, http.StatusOK, map[string]any{"success": true, "channel_id": inst.store.ChannelID(inst.channelID)})
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
@@ -251,6 +285,9 @@ func (s *Server) handleInstanceRotateNow(w http.ResponseWriter, r *http.Request)
 	inst, ok := s.getInstance(r)
 	if !ok {
 		http.NotFound(w, r)
+		return
+	}
+	if !s.requireAdmin(w, r) {
 		return
 	}
 	if r.Method != http.MethodPost {
@@ -278,7 +315,7 @@ func (s *Server) keysHandler(w http.ResponseWriter, r *http.Request, inst *insta
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"success": false, "message": err.Error()})
 		return
 	}
-	log.Printf("INFO channel #%d key pool replaced: %d key(s), progress reset", inst.cfg.ChannelIDs[0], count)
+	log.Printf("INFO channel #%d key pool replaced: %d key(s), progress reset", inst.channelID, count)
 	fireInstance(inst.trigger)
 	writeJSON(w, http.StatusOK, map[string]any{"success": true, "count": count})
 }
@@ -300,11 +337,19 @@ func (s *Server) keysAppendHandler(w http.ResponseWriter, r *http.Request, inst 
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"success": false, "message": err.Error()})
 		return
 	}
-	log.Printf("INFO channel #%d key pool appended: %d new key(s) added", inst.cfg.ChannelIDs[0], added)
+	log.Printf("INFO channel #%d key pool appended: %d new key(s) added", inst.channelID, added)
 	if added > 0 {
 		fireInstance(inst.trigger)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"success": true, "added": added})
+}
+
+func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
+	acc := getAccount(r)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"is_admin": acc.IsAdmin,
+		"label":    acc.Label,
+	})
 }
 
 func fireInstance(trigger chan<- struct{}) {
